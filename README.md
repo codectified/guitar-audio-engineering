@@ -6,23 +6,19 @@ a session on this topic without a repo backing it yet.
 
 ## What this repo is for
 
-Not yet defined beyond the name. Could cover: recording/home-studio
-setup, mixing, amp/pedal/signal-chain work, guitar playing/practice
-itself, DAW workflow, gear research — any or all of these. **Don't
-assume which** — let it declare itself from what actually gets worked on
-here, and update this section once it does.
+First thing built: a **live amp-sim / practice rig in Python** (`rig/`)
+for playing a Squier through a Focusrite: SRV / Hendrix / Clapton tones,
+a tuner with alternate tunings, and a maqam/raga scale trainer. Other
+directions (recording, mixing, gear) are still open.
 
 ## Status
 
-**Early-scaffold**, created 2026-10-02. No content yet — this is the
-very first session.
+**Active**, 2026-10-02. `rig/rig.py` runs on the real hardware; see
+`HANDOFF.md` for what's verified, what isn't, and next steps.
 
 ## Open questions
 
-- What's the actual focus: playing/practice, recording/production,
-  gear, or some mix? Not yet stated.
-- Is this a learning project, a specific goal (e.g. a home studio build,
-  a recording project), or ongoing practice/hobby tracking?
+- Will this grow beyond the rig into recording/production or gear work?
 
 ## Master Hub summary
 
