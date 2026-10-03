@@ -44,7 +44,9 @@ from pedalboard import (Chorus, Compressor, Convolution, Delay, Distortion, Gain
 HERE = Path(__file__).parent
 IR_DIR = HERE / "irs"
 NAM_DIR = HERE / "nam"
-NAM_PLUGIN = Path(r"C:\Program Files\Common Files\VST3\NeuralAmpModeler.vst3")
+# pedalboard can't scan the .vst3 bundle folder for NAM, but loads the binary inside it fine.
+NAM_PLUGIN = Path(r"C:\Program Files\Common Files\VST3\NeuralAmpModeler.vst3"
+                  r"\Contents\x86_64-win\NeuralAmpModeler.vst3")
 
 SR = 48000  # replaced by the interface's native rate at startup
 BLOCK = 128

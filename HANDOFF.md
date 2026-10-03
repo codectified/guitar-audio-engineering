@@ -35,8 +35,10 @@ Signal path: Squier Strat → Focusrite (ASIO, 44.1 kHz) → presets → Focusri
 
 ## Next steps
 
-1. Omar installs NAM: `rig/plugins/NeuralAmpModeler Installer.exe` (needs admin — Claude was not
-   permitted to run it). Then test `python rig/rig.py --setup-nam 1` end to end.
+1. NAM is installed (2026-10-02). pedalboard can't scan the `.vst3` bundle folder, so `NAM_PLUGIN`
+   points at the binary inside it. Verified headless: plugin loads, state round-trips, presets build
+   and process audio with it. Still to do by hand: `python rig/rig.py --setup-nam 1` (opens the
+   plugin window) with a real `.nam` capture.
 2. Get captures from TONE3000 (free account required; API needs OAuth, no anonymous download):
    Fender Super Reverb for SRV, Marshall Plexi for Hendrix/Clapton.
 3. Optional cab IRs → `rig/irs/<Preset>.wav` or `rig/irs/default.wav`.
