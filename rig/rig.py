@@ -738,7 +738,13 @@ def main():
     def record(seconds):
         """RMS level in dB of each 50 ms window, per input: shape (2, windows)."""
         x = sd.rec(int(seconds * SR), samplerate=SR, channels=2, device=in_dev, dtype="float32")
-        sd.wait()
+        deadline = time.time() + seconds + 3
+        while sd.get_stream().active:  # sd.wait() hangs forever if the interface has dropped off USB
+            if time.time() > deadline:
+                sd.stop()
+                sys.exit("No audio is coming from the interface. Unplug the Focusrite's USB cable, wait 10 s, "
+                         "plug it back in, then start the rig again.")
+            sd.sleep(50)
         hpf = Pedalboard([HighpassFilter(cutoff_frequency_hz=70), HighpassFilter(cutoff_frequency_hz=70)])
         x = hpf(x.T.copy(), SR)[:, SR // 4:]  # skip the filter settling
         win = SR // 20
