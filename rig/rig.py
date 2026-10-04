@@ -44,9 +44,9 @@ from pedalboard import (Chorus, Compressor, Convolution, Delay, Distortion, Gain
 HERE = Path(__file__).parent
 IR_DIR = HERE / "irs"
 NAM_DIR = HERE / "nam"
-# pedalboard can't scan the .vst3 bundle folder for NAM, but loads the binary inside it fine.
-NAM_PLUGIN = Path(r"C:\Program Files\Common Files\VST3\NeuralAmpModeler.vst3"
-                  r"\Contents\x86_64-win\NeuralAmpModeler.vst3")
+# TONE3000's plugin (the NAM author's "Gateway" build) reads the newer A2 captures; the old
+# NeuralAmpModeler 0.7.13 can't. Point at the binary inside the bundle: pedalboard can't scan the folder.
+NAM_PLUGIN = Path(r"C:\Program Files\Common Files\VST3\TONE3000.vst3\Contents\x86_64-win\TONE3000.vst3")
 
 SR = 48000  # replaced by the interface's native rate at startup
 BLOCK = 128
@@ -181,6 +181,10 @@ PRESETS = {
     "0": ("Clean", clean, 0.0),
 }
 
+# The TONE3000 plugin normalizes its own output, so a NAM amp needs a much smaller trim than the
+# built-in amp it replaces. Measured against the built-in presets with a synthetic strummed Strat.
+NAM_TRIM_DB = {"1": 0.0, "2": -1.5, "3": -1.5, "4": 1.5}
+
 
 def load_nam(key):
     """The Neural Amp Modeler plugin with the capture saved by --setup-nam, or None."""
@@ -193,8 +197,9 @@ def load_nam(key):
 
 
 def build(key):
-    """Assemble a preset, swapping in a NAM amp capture and/or cab IR when they exist."""
-    name, builder, _ = PRESETS[key]
+    """Assemble a preset, swapping in a NAM amp capture and/or cab IR when they exist.
+    Returns the board, what it's using, and its output trim in dB."""
+    name, builder, trim_db = PRESETS[key]
     pedals, amp, cab_cutoff, fx = builder()
     sources = []
 
@@ -202,17 +207,16 @@ def build(key):
     if nam is not None:
         amp = [nam]
         sources.append("NAM amp")
+        trim_db = NAM_TRIM_DB.get(key, 0.0)
 
     ir = next((p for p in (IR_DIR / f"{name}.wav", IR_DIR / "default.wav") if p.exists()), None)
     if ir is not None:
         speaker = [Convolution(str(ir), mix=1.0)]
         sources.append(f"IR {ir.name}")
-    elif nam is not None:
-        speaker = []  # most NAM captures are amp-only, but some include the cab; drop an IR in irs/ if it's fizzy
     else:
-        speaker = cab(cab_cutoff)
+        speaker = cab(cab_cutoff)  # NAM captures here are amp-only, so they still need a cab
 
-    return Pedalboard(pedals + amp + speaker + fx), sources
+    return Pedalboard(pedals + amp + speaker + fx), sources, trim_db
 
 
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -381,9 +385,9 @@ def scale_display(freq, scale, root):
 
 class Rig:
     def __init__(self, input_channel=0):
-        self.boards = {}
+        self.boards, self.trims = {}, {}
         for k in PRESETS:
-            self.boards[k], sources = build(k)
+            self.boards[k], sources, self.trims[k] = build(k)
             if sources:
                 print(f"  {PRESETS[k][0]}: using {', '.join(sources)}")
         self.current = "0"  # start clean and quiet; pick a tone once you know it's not howling
@@ -420,7 +424,10 @@ class Rig:
 
     def run_board(self, key, x):
         y = self.boards[key](x, SR, reset=False)
-        return y * 10 ** (PRESETS[key][2] / 20)
+        if y.shape[1] < x.shape[1]:
+            # plugins with latency (NAM: 29 samples) return a short first block after a reset
+            y = np.pad(y, ((0, 0), (x.shape[1] - y.shape[1], 0)))
+        return y * 10 ** (self.trims[key] / 20)
 
     def callback(self, indata, outdata, frames, time_info, status):
         if status:
@@ -475,15 +482,15 @@ def meter(level, width=20):
 
 def setup_nam(key):
     if not NAM_PLUGIN.exists():
-        sys.exit(f"Neural Amp Modeler isn't installed (expected {NAM_PLUGIN}).\n"
-                 "Get it free from https://www.neuralampmodeler.com/ and run this again.")
+        sys.exit(f"The TONE3000 (Neural Amp Modeler) plugin isn't installed (expected {NAM_PLUGIN}).\n"
+                 "Get the free TONE3000 plugin from https://neuralampmodeler.com/users and run this again.")
     NAM_DIR.mkdir(exist_ok=True)
     state = NAM_DIR / f"{key}.state"
     plugin = load_plugin(str(NAM_PLUGIN))
     if state.exists():
         plugin.raw_state = state.read_bytes()
-    print(f"Load a .nam capture for {PRESETS[key][0]} in the plugin window (leave its IR slot empty "
-          "unless you want it), then close the window.")
+    print(f"Load a .nam capture for {PRESETS[key][0]} in the plugin window (captures are in "
+          f"{NAM_DIR / 'captures'}), then close the window.")
     plugin.show_editor()
     state.write_bytes(plugin.raw_state)
     print(f"Saved. {PRESETS[key][0]} will use this amp next time you start the rig. "

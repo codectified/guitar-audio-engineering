@@ -1,4 +1,4 @@
-# Handoff — 2026-10-02
+# Handoff — 2026-10-03
 
 ## Where things stand
 
@@ -30,19 +30,36 @@ Signal path: Squier Strat → Focusrite (ASIO, 44.1 kHz) → presets → Focusri
   (0.0 cents on exact tones), tunings, scale maps and bend detection, full `main()` with fake audio/keys.
 - **Not yet verified by ear on the real guitar:** the reworked Hendrix preset and the added
   "oomph" (cab low-end bump + power-amp stage). Ask Omar how they sound.
-- **Untested:** Neural Amp Modeler integration (`--setup-nam N`, `nam/<key>.state`) and
-  cab IR loading from the real plugin (IR loading itself was tested with a synthetic IR).
+- **NAM amps (2026-10-03):** presets 1–4 now use real amp captures via the TONE3000 plugin.
+  Verified offline: each preset plays its capture, levels within ~1.5 dB of each other and Clean,
+  preset switching OK, <10% CPU at a 64-sample buffer. **Not yet heard on the real guitar.**
+- **Untested:** cab IR loading from a real IR file (tested with a synthetic IR only).
 
 ## Next steps
 
-1. NAM is installed (2026-10-02). pedalboard can't scan the `.vst3` bundle folder, so `NAM_PLUGIN`
-   points at the binary inside it. Verified headless: plugin loads, state round-trips, presets build
-   and process audio with it. Still to do by hand: `python rig/rig.py --setup-nam 1` (opens the
-   plugin window) with a real `.nam` capture.
-2. Get captures from TONE3000 (free account required; API needs OAuth, no anonymous download):
-   Fender Super Reverb for SRV, Marshall Plexi for Hendrix/Clapton.
-3. Optional cab IRs → `rig/irs/<Preset>.wav` or `rig/irs/default.wav`.
-4. Tune presets by ear based on Omar's feedback.
+1. Omar plays the NAM presets and says how they sound. If one is too clean/dirty, there are 20
+   Super Reverb settings and 3 Plexi settings in `rig/nam/captures/` to swap in.
+2. Optional cab IRs → `rig/irs/<Preset>.wav` or `rig/irs/default.wav` (the built-in cab filter is
+   what the amp-only captures run into now). The Super Reverb capture's page says matching speaker IRs are available separately.
+3. Tune presets by ear based on Omar's feedback.
+
+## NAM setup (how it works now)
+
+- Plugin: **TONE3000** (`C:\Program Files\Common Files\VST3\TONE3000.vst3`), the NAM author's
+  "Gateway" build from neuralampmodeler.com/users. The old NeuralAmpModeler 0.7.13 in `rig/plugins/`
+  can't read current TONE3000 captures (A2 / "SlimmableContainer", format 0.7.0). Point pedalboard
+  at the binary inside the bundle; it can't scan the folder.
+- Captures (free, no account needed) are in `rig/nam/captures/`: SRV = Super Reverb "Vib, V5 T5 M5 B5",
+  Hendrix = Plexi Driven, Clapton = Plexi + Boost, Slowhand = Plexi Low Gain.
+- `rig/nam/<key>.state` is the plugin's saved state (ignored by git). The plugin embeds the whole
+  model in it, so writing a model path in by hand doesn't work. `--setup-nam N` opens the plugin
+  window titled "Pedalboard": drag a `.nam` file onto a chain block, then close the window.
+  The "TONE3000" standalone app is separate and doesn't affect the rig.
+- These states were made by splitting a 4-amp plugin preset (`%APPDATA%\TONE3000\Presets\custom.t3kpreset`)
+  into one block each. Format: JUCE base64 VST3 state → `T3KB` + JUCE ValueTree; amps are
+  `ChainSnapshot/ChainBlocks/ChainBlock` nodes with `type=nam`, `toneJson` and an embedded `ModelCache`.
+- The plugin normalizes its output, so NAM presets use `NAM_TRIM_DB` instead of the built-in trims.
+  It reports 29 samples of latency, so its first block after a reset is short (padded in `run_board`).
 
 ## Gotchas
 
