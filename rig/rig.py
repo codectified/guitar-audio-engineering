@@ -36,6 +36,8 @@ NAM_PLUGIN = Path(r"C:\Program Files\Common Files\VST3\TONE3000.vst3\Contents\x8
 SR = 48000  # replaced by the interface's native rate at startup
 # Exit code 11/12 = "restart me on input 1/2"; Guitar Rig.bat watches for it.
 RESTART_EXIT_BASE = 10
+RESTART_FLAG = HERE / "restart.flag"  # create to make a running rig restart cleanly
+QUIT_FLAG = HERE / "quit.flag"        # create to make a running rig quit cleanly
 GATE_FLOOR_MAX_DB = -58  # noise gates never close above this (soft playing sits around -50 dBFS)
 BLOCK = 128
 
@@ -722,6 +724,8 @@ def main():
 
     if args.setup_nam:
         return setup_nam(args.setup_nam)
+    for stale in (RESTART_FLAG, QUIT_FLAG):
+        stale.unlink(missing_ok=True)
 
     in_dev, out_dev, driver, blocksize = pick_devices(args.device)
     if in_dev is None or out_dev is None:
@@ -792,6 +796,13 @@ def main():
             print(fretboard(SCALES[scale], root, TUNINGS[tuning]) + "\n")
 
         while True:
+            # Another program (e.g. Claude after a code change) can ask for a clean restart/quit by creating
+            # one of these files. Never kill the rig mid-stream: that can wedge the USB audio driver.
+            for flag, code in ((RESTART_FLAG, RESTART_EXIT_BASE + rig.input_channel + 1), (QUIT_FLAG, None)):
+                if flag.exists():
+                    flag.unlink(missing_ok=True)
+                    print(f"\n{'Restarting' if code else 'Quitting'} ({flag.name} found)...")
+                    return code
             while msvcrt.kbhit():
                 k = msvcrt.getwch().lower()
                 if k == "q":

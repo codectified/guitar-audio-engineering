@@ -1,4 +1,4 @@
-# Handoff — 2026-10-03
+# Handoff — 2026-10-04
 
 ## Where things stand
 
@@ -16,7 +16,11 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - Scale trainer (`s` scale, `r` root): 16 maqams/ragas/Japanese/gamelan scales; prints an ASCII
   fretboard for the current tuning, quarter tones shown as `X~` (bend the fret a quarter step up),
   live readout of which degree you're on and whether the bend landed.
-- Startup: measures noise floor, asks you to strum, auto-picks the guitar input, sets gates above the noise.
+- Startup: measures noise floor (quietest 50 ms RMS windows, so a stray pluck doesn't skew it), asks you
+  to strum, auto-picks the guitar input, sets gates 8 dB above the noise, capped at -58 dBFS.
+  `--input-channel 2` skips the strum. Startup recording times out with a "replug the Focusrite"
+  message instead of hanging if the interface stops delivering audio.
+- `x` restarts in place (exit code 11/12 → `Guitar Rig.bat` relaunches with `--input-channel`).
 
 ## Hardware facts (learned the hard way)
 
@@ -29,6 +33,19 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - **Run at 48 kHz** (rig.py does, falling back to the device default). Windows shared mode uses the
   Focusrite at 48 kHz; opening ASIO at 44.1 kHz switched the hardware clock under Windows and garbled
   system audio until a reboot. Quick fix if it happens again: unplug/replug the Focusrite USB.
+- **2026-10-04 ~4:20 am: the ASMedia USB 3.1 host controller crashed** (Device Manager: Error), taking
+  the Focusrite with it after ~8 h of streaming; replugging into the same port did nothing. Reset:
+  admin `pnputil /restart-device "PCI\VEN_1B21&DEV_1242&SUBSYS_09611028&REV_00\4&1EAA0F3C&0&00E0"`
+  or reboot. Keep the Focusrite on an **Intel-controller port**, not the ASMedia 10 Gbps ones;
+  consider disabling USB selective suspend. Cause unproven: ASMedia flakiness and/or Claude
+  force-killing the rig mid-stream several times that night.
+
+## Relaunching the rig (for Claude)
+
+- **Never `Stop-Process` a running rig.** Create `rig/restart.flag` (clean restart, keeps input) or
+  `rig/quit.flag` (clean quit); the main loop checks every 50 ms and closes the ASIO stream properly.
+  Stale flags are cleared at startup. Only launch a new rig when no `python` rig process is running.
+- Launch: `Start-Process "rig\Guitar Rig.bat" -ArgumentList "--input-channel 2"` (opens its own console).
 
 ## Verified vs. not
 
@@ -39,18 +56,25 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - **NAM amps (2026-10-03):** presets 1–4 now use real amp captures via the TONE3000 plugin.
   Verified offline: each preset plays its capture, levels within ~1.5 dB of each other and Clean,
   preset switching OK, <10% CPU at a 64-sample buffer. **Not yet heard on the real guitar.**
+- **Heard on the real guitar (2026-10-03/04):** "sounds awesome" with NAM amps. Presets 5–9 and `d`
+  are newer; ask how they sound.
+- **Untested live:** the restart/quit flag files and the record timeout (logic tested with fakes only).
 - **Untested:** cab IR loading from a real IR file (tested with a synthetic IR only).
 
 ## Next steps
 
-0. (2026-10-03) Omar is rebooting to clear garbled system audio, then starts the rig for the first
-   time with NAM amps at 48 kHz. Ask how presets 1–4 sound and whether system audio stayed normal.
-
-1. Omar plays the NAM presets and says how they sound. If one is too clean/dirty, there are 20
-   Super Reverb settings and 3 Plexi settings in `rig/nam/captures/` to swap in.
-2. Optional cab IRs → `rig/irs/<Preset>.wav` or `rig/irs/default.wav` (the built-in cab filter is
-   what the amp-only captures run into now). The Super Reverb capture's page says matching speaker IRs are available separately.
-3. Tune presets by ear based on Omar's feedback.
+0. Omar is rebooting (ASMedia controller crash). After: check `Get-PnpDevice -PresentOnly` shows
+   "Analogue 1 + 2 (... Focusrite USB Audio)" and "Scarlett Solo USB", then launch the rig.
+1. Ask how presets 5–9 and `d` (Derek Trucks) sound; tune by ear. Spare captures: 20 Super Reverb
+   settings + 3 Plexi in `rig/nam/captures/`.
+2. Optional cab IRs → `rig/irs/<Preset>.wav` or `rig/irs/default.wav`.
+3. Ideas Omar liked: more players (Albert Collins, Peter Green, T-Bone Walker, Buddy Guy); a Fender
+   Bassman capture for Buddy Guy / Muddy; make `--input-channel 2` the launcher default + desktop shortcut.
+4. **Portability (Omar asked 2026-10-04):** replace the laptop with a Raspberry Pi 5-type box.
+   Discussed: Pi 5 + the Scarlett Solo (class-compliant) or a Hi-Z audio HAT (e.g. Pisound); NAM on
+   Linux via NAM core / LV2 (pedalboard can't host LV2, and the TONE3000 VST3 is Windows/mac only),
+   lighter/slimmed models for CPU; or an off-the-shelf NAM box (e.g. MOD Dwarf) / open-source Pi-Stomp.
+   Not started; needs a decision from Omar.
 
 ## NAM setup (how it works now)
 
