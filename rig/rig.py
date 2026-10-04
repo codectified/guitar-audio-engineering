@@ -1,35 +1,20 @@
 """
 Live guitar rig: Squier -> Focusrite -> Python -> headphones/monitors.
-
-Keys (in this window):
-  1  SRV        Tube Screamer into a cranked Fender, spring reverb
-  2  Hendrix    Fuzz Face + Uni-Vibe into a Marshall stack
-  3  Clapton    Cream-era "woman tone" (neck pickup, tone knob rolled off)
-  4  Slowhand   80s Clapton Strat: mid-boost, compressed, chorus
-  0  Clean      Fender clean
-  t      tuner on/off (mutes the output while tuning)
-  n      next tuning: Standard, Eb (SRV/Hendrix), Drop D, Open G, Open E, Open D, DADGAD,
-         D Standard, Chromatic
-  s      scale trainer: next scale (maqams, ragas, Japanese, gamelan...). Prints a fretboard map,
-         then shows live which scale note you're on and whether your quarter-tone bends land
-  r      scale trainer: next root note
-  [ / ]  input trim -/+ 3 dB (more = more drive)
-  - / +  master volume -/+ 3 dB
-  i      swap input channel (auto-detected at startup by strumming)
-  m      mute / unmute  (hit this if it ever starts howling)
-  q      quit
+The key menu is printed at startup (and again with h).
 
 Turn OFF "Direct Monitor" on the Focusrite or you'll hear your dry signal too.
 
 Real amp captures (optional):
   irs/<Preset>.wav   speaker cab IR for that preset, e.g. irs/SRV.wav (irs/default.wav = all presets)
-  python rig.py --setup-nam 1   opens the Neural Amp Modeler plugin for preset 1: load a .nam
-                                capture in it, close the window, and preset 1 uses that amp from then on
+  python rig.py --setup-nam 1   opens the TONE3000 (Neural Amp Modeler) plugin for preset 1: drag a
+                                .nam capture onto a chain block, close the window, and preset 1 uses it
 """
 import argparse
 import os
 import msvcrt
+import re
 import sys
+import textwrap
 import time
 from pathlib import Path
 
@@ -185,38 +170,71 @@ PRESETS = {
 # built-in amp it replaces. Measured against the built-in presets with a synthetic strummed Strat.
 NAM_TRIM_DB = {"1": 0.0, "2": -1.5, "3": -1.5, "4": 1.5}
 
+# What's in each preset, for the menu: (one-line vibe, pedals, built-in amp, effects)
+CHAIN_INFO = {
+    "1": ("Tube Screamer into a cranked Fender, spring reverb",
+          "Tube Screamer", "Fender Super Reverb (built-in sim)", "Spring reverb"),
+    "2": ("Fuzz Face + Uni-Vibe into a Marshall stack",
+          "Fuzz Face > Uni-Vibe", "Marshall Plexi (built-in sim)", "Delay > Reverb"),
+    "3": ("Cream-era \"woman tone\" (neck pickup, tone knob rolled off)",
+          "Neck pickup, tone on 0", "Cranked Marshall (built-in sim)", "Reverb"),
+    "4": ("80s Clapton Strat: mid-boost, compressed, chorus",
+          "Compressor > Mid-boost", "Marshall (built-in sim)", "Chorus > Delay > Reverb"),
+    "0": ("Fender clean",
+          "Compressor", "Fender clean (built-in sim)", "Reverb"),
+}
+
+_JUCE_B64 = ".ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+"
+
+
+def nam_capture_name(state):
+    """The capture's title from a saved TONE3000 plugin state (JUCE's own base64 inside VST3 XML)."""
+    m = re.search(rb"<IComponent>(\d+)\.([^<]*)</IComponent>", state)
+    if not m:
+        return None
+    lookup = np.full(256, 0, np.uint8)
+    lookup[np.frombuffer(_JUCE_B64.encode(), np.uint8)] = np.arange(64, dtype=np.uint8)
+    sixes = lookup[np.frombuffer(m.group(2), np.uint8)]
+    bits = np.unpackbits(sixes[:, None], axis=1, bitorder="little")[:, :6].ravel()
+    data = np.packbits(bits, bitorder="little")[: int(m.group(1))].tobytes()
+    title = re.search(rb'"title": "(.*?)"', data)
+    return " ".join(title.group(1).decode(errors="replace").split()) if title else None
+
 
 def load_nam(key):
-    """The Neural Amp Modeler plugin with the capture saved by --setup-nam, or None."""
+    """The NAM plugin with the capture saved by --setup-nam and the capture's name, or (None, None)."""
     state = NAM_DIR / f"{key}.state"
     if not (NAM_PLUGIN.exists() and state.exists()):
-        return None
+        return None, None
+    raw = state.read_bytes()
     plugin = load_plugin(str(NAM_PLUGIN))
-    plugin.raw_state = state.read_bytes()
-    return plugin
+    plugin.raw_state = raw
+    return plugin, nam_capture_name(raw) or "NAM capture"
 
 
 def build(key):
     """Assemble a preset, swapping in a NAM amp capture and/or cab IR when they exist.
-    Returns the board, what it's using, and its output trim in dB."""
+    Returns the board, a {pedals, amp, cab, fx} description of what it's using, and its output trim in dB."""
     name, builder, trim_db = PRESETS[key]
     pedals, amp, cab_cutoff, fx = builder()
-    sources = []
+    _, pedals_desc, amp_desc, fx_desc = CHAIN_INFO[key]
 
-    nam = load_nam(key)
+    nam, capture = load_nam(key)
     if nam is not None:
         amp = [nam]
-        sources.append("NAM amp")
+        amp_desc = f"{capture} (NAM)"
         trim_db = NAM_TRIM_DB.get(key, 0.0)
 
     ir = next((p for p in (IR_DIR / f"{name}.wav", IR_DIR / "default.wav") if p.exists()), None)
     if ir is not None:
         speaker = [Convolution(str(ir), mix=1.0)]
-        sources.append(f"IR {ir.name}")
+        cab_desc = f"IR {ir.name}"
     else:
         speaker = cab(cab_cutoff)  # NAM captures here are amp-only, so they still need a cab
+        cab_desc = "built-in sim"
 
-    return Pedalboard(pedals + amp + speaker + fx), sources, trim_db
+    chain = {"pedals": pedals_desc, "amp": amp_desc, "cab": cab_desc, "fx": fx_desc}
+    return Pedalboard(pedals + amp + speaker + fx), chain, trim_db
 
 
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -385,11 +403,9 @@ def scale_display(freq, scale, root):
 
 class Rig:
     def __init__(self, input_channel=0):
-        self.boards, self.trims = {}, {}
+        self.boards, self.chains, self.trims = {}, {}, {}
         for k in PRESETS:
-            self.boards[k], sources, self.trims[k] = build(k)
-            if sources:
-                print(f"  {PRESETS[k][0]}: using {', '.join(sources)}")
+            self.boards[k], self.chains[k], self.trims[k] = build(k)
         self.current = "0"  # start clean and quiet; pick a tone once you know it's not howling
         self.previous = None
         self.fade_pos = 10 ** 9
@@ -497,8 +513,57 @@ def setup_nam(key):
           f"Delete {state} to go back to the built-in amp.")
 
 
+WIDTH = 100
+
+
+def section(title):
+    return f"\n  ── {title} " + "─" * (WIDTH - len(title) - 6)
+
+
+def chain_lines(chain, indent):
+    """Two lines: what's making the core sound (amp + cab), then what's around it (pedals + effects)."""
+    return [f"{indent}amp    {chain['amp']:<52} cab  {chain['cab']}",
+            f"{indent}pedals {chain['pedals']:<52} fx   {chain['fx']}"]
+
+
+def menu(rig):
+    lines = ["", "═" * WIDTH, "GUITAR RIG".center(WIDTH), "═" * WIDTH, section("TONES")]
+    for k in [*sorted(k for k in PRESETS if k != "0"), "0"]:
+        lines.append(f"   {k}  {PRESETS[k][0]:<10}{CHAIN_INFO[k][0]}")
+        lines += chain_lines(rig.chains[k], " " * 16)
+    lines += [
+        section("PLAYING"),
+        "   [ / ]  input trim -/+ 3 dB (more = more drive)",
+        "   - / +  master volume -/+ 3 dB",
+        "   m      mute / unmute  (hit this if it ever starts howling)",
+        "   i      swap input channel (auto-detected at startup by strumming)",
+        section("TUNER"),
+        "   t      tuner on/off (mutes the output while tuning)",
+        *textwrap.wrap("next tuning: " + ", ".join(t[0].split(" (")[0] for t in TUNINGS), WIDTH - 10,
+                       initial_indent="   n      ", subsequent_indent=" " * 10),
+        section("SCALE TRAINER"),
+        "   s      next scale (maqams, ragas, Japanese, gamelan...): prints a fretboard map, then shows",
+        "          live which scale note you're on and whether your quarter-tone bends land",
+        "   r      next root note",
+        section("OTHER"),
+        "   h      show this menu again",
+        "   q      quit",
+        "═" * WIDTH,
+    ]
+    return "\n".join(lines)
+
+
+def announce(rig, key):
+    """Print which tone is now active, above the live status line."""
+    sys.stdout.write("\r" + " " * 110 + "\r")
+    first, second = chain_lines(rig.chains[key], "")
+    head = f"▶ {key} {PRESETS[key][0]}"
+    print(f"{head:<16}{first}\n{'':<16}{second}")
+
+
 def main():
     global SR
+    sys.stdout.reconfigure(errors="replace")  # box-drawing characters on consoles that can't show them
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", default="Focusrite", help="part of the audio interface name")
     ap.add_argument("--input-channel", type=int, choices=[1, 2], help="skip auto-detect and use this input")
@@ -550,10 +615,11 @@ def main():
     stream = sd.Stream(samplerate=SR, blocksize=blocksize, device=(in_dev, out_dev), channels=(2, 2),
                        dtype="float32", latency="low", callback=rig.callback)
 
-    print(__doc__)
+    print(menu(rig))
     with stream:
         print(f"Driver: {driver} @ {SR} Hz, latency {(stream.latency[0] + stream.latency[1]) * 1000:.1f} ms round trip"
               + ("  (lower the buffer size in Focusrite Control to cut this)" if driver == "ASIO" else "") + "\n")
+        announce(rig, rig.current)
         readings = []
         tuning = 0
         scale = None  # index into SCALES while the scale trainer is on
@@ -570,7 +636,13 @@ def main():
                     print()
                     return
                 if k in PRESETS:
-                    rig.switch(k)
+                    if k != rig.current:
+                        rig.switch(k)
+                        announce(rig, k)
+                elif k == "h":
+                    sys.stdout.write("\r" + " " * 110 + "\r")
+                    print(menu(rig))
+                    announce(rig, rig.current)
                 elif k == "t":
                     rig.tuner = not rig.tuner
                     readings.clear()
