@@ -5,7 +5,7 @@
 `rig/rig.py` is a live guitar amp-sim in Python (pedalboard + sounddevice).
 Launch with `rig/Guitar Rig.bat` (or `python rig/rig.py`).
 
-Signal path: Squier Strat → Focusrite (ASIO, 44.1 kHz) → presets → Focusrite outs.
+Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite outs.
 
 - Presets: `1` SRV, `2` Hendrix, `3` Clapton (Cream "woman tone"), `4` Slowhand (80s Clapton), `0` Clean.
   Each preset = pedals → amp → cab → effects, levels matched to ~-15 dBFS RMS.
@@ -23,6 +23,9 @@ Signal path: Squier Strat → Focusrite (ASIO, 44.1 kHz) → presets → Focusri
   latency crept up over time (separate in/out clocks). ASIO round trip ~22 ms at default buffer;
   lower it in Focusrite Control → Settings (buffer 64–96, Safe Mode off).
 - Direct Monitor on the Focusrite must be OFF.
+- **Run at 48 kHz** (rig.py does, falling back to the device default). Windows shared mode uses the
+  Focusrite at 48 kHz; opening ASIO at 44.1 kHz switched the hardware clock under Windows and garbled
+  system audio until a reboot. Quick fix if it happens again: unplug/replug the Focusrite USB.
 
 ## Verified vs. not
 
@@ -36,6 +39,9 @@ Signal path: Squier Strat → Focusrite (ASIO, 44.1 kHz) → presets → Focusri
 - **Untested:** cab IR loading from a real IR file (tested with a synthetic IR only).
 
 ## Next steps
+
+0. (2026-10-03) Omar is rebooting to clear garbled system audio, then starts the rig for the first
+   time with NAM amps at 48 kHz. Ask how presets 1–4 sound and whether system audio stayed normal.
 
 1. Omar plays the NAM presets and says how they sound. If one is too clean/dirty, there are 20
    Super Reverb settings and 3 Plexi settings in `rig/nam/captures/` to swap in.
