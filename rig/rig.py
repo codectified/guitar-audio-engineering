@@ -512,7 +512,14 @@ def main():
     in_dev, out_dev, driver, blocksize = pick_devices(args.device)
     if in_dev is None or out_dev is None:
         sys.exit(f"Couldn't find an audio device matching '{args.device}'. Devices:\n{sd.query_devices()}")
-    SR = int(sd.query_devices(in_dev)["default_samplerate"])  # run at the interface's own rate, no resampling
+    # 48 kHz matches Windows' shared-mode rate (opening ASIO at 44.1 kHz switches the interface's clock
+    # under Windows and garbles other audio until a reboot) and the NAM captures' own rate.
+    SR = 48000
+    try:
+        sd.check_input_settings(device=in_dev, channels=2, samplerate=SR, dtype="float32")
+        sd.check_output_settings(device=out_dev, channels=2, samplerate=SR, dtype="float32")
+    except Exception:
+        SR = int(sd.query_devices(in_dev)["default_samplerate"])
 
     def record(seconds):
         x = sd.rec(int(seconds * SR), samplerate=SR, channels=2, device=in_dev, dtype="float32")
