@@ -34,6 +34,8 @@ NAM_DIR = HERE / "nam"
 NAM_PLUGIN = Path(r"C:\Program Files\Common Files\VST3\TONE3000.vst3\Contents\x86_64-win\TONE3000.vst3")
 
 SR = 48000  # replaced by the interface's native rate at startup
+# Exit code 11/12 = "restart me on input 1/2"; Guitar Rig.bat watches for it.
+RESTART_EXIT_BASE = 10
 GATE_FLOOR_MAX_DB = -58  # noise gates never close above this (soft playing sits around -50 dBFS)
 BLOCK = 128
 
@@ -693,6 +695,7 @@ def menu(rig):
         "   r      next root note",
         section("OTHER"),
         "   h      show this menu again",
+        "   x      restart (picks up new presets and code changes, keeps your input)",
         "   q      quit",
         "═" * WIDTH,
     ]
@@ -788,6 +791,9 @@ def main():
                 if k == "q":
                     print()
                     return
+                if k == "x":
+                    print("\nRestarting...")
+                    return RESTART_EXIT_BASE + rig.input_channel + 1
                 if k in PRESETS:
                     if k != rig.current:
                         rig.switch(k)
@@ -850,4 +856,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
