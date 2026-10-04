@@ -141,6 +141,102 @@ def slowhand():
     return pedals, amp, 5500, fx
 
 
+def bb_king():
+    pedals = [
+        NoiseGate(threshold_db=-64, ratio=3, release_ms=200),
+        # Lucille's sustain comes from a loud clean amp; a gentle comp stands in for that squeeze
+        Compressor(threshold_db=-24, ratio=3, attack_ms=10, release_ms=200),
+        # ES-355 Varitone: the notch that gives the nasal, vocal "sting"
+        PeakFilter(cutoff_frequency_hz=1300, gain_db=-5, q=1.4),
+        PeakFilter(cutoff_frequency_hz=600, gain_db=3, q=0.8),
+    ]
+    # Big clean Fender (Twin / Lab Series) with lots of headroom
+    amp = [
+        PeakFilter(cutoff_frequency_hz=120, gain_db=2, q=0.8),
+        Gain(gain_db=6), Distortion(drive_db=3),
+        HighShelfFilter(cutoff_frequency_hz=3000, gain_db=1),
+        LowShelfFilter(cutoff_frequency_hz=160, gain_db=2),
+    ]
+    fx = [Reverb(room_size=0.5, damping=0.5, wet_level=0.15, dry_level=0.88, width=0.0)]
+    return pedals, amp, 5500, fx
+
+
+def howlin_wolf():
+    pedals = [
+        NoiseGate(threshold_db=-60, ratio=3, release_ms=150),
+        # Hubert Sumlin: bare fingers on a bridge pickup, thin and stabbing
+        HighpassFilter(cutoff_frequency_hz=160),
+        PeakFilter(cutoff_frequency_hz=2200, gain_db=4, q=0.9),
+    ]
+    # Small Fender combo turned all the way up: breaking up hard, a bit boxy
+    amp = [
+        PeakFilter(cutoff_frequency_hz=900, gain_db=4, q=0.7),
+        Gain(gain_db=12), Distortion(drive_db=14),
+        LowpassFilter(cutoff_frequency_hz=4500),
+        *power_amp(presence_db=2),
+    ]
+    # a small Chess studio room: slapback and a short tail
+    fx = [
+        Delay(delay_seconds=0.09, feedback=0.0, mix=0.12),
+        Reverb(room_size=0.2, damping=0.6, wet_level=0.12, dry_level=0.9, width=0.0),
+    ]
+    return pedals, amp, 4200, fx
+
+
+def muddy_waters():
+    pedals = [
+        NoiseGate(threshold_db=-60, ratio=3, release_ms=200),
+        # Telecaster bridge: twang and bite
+        HighpassFilter(cutoff_frequency_hz=120),
+        PeakFilter(cutoff_frequency_hz=3000, gain_db=4, q=0.8),
+    ]
+    # Cranked Super Reverb / Bassman: loud, raw, gritty
+    amp = [
+        PeakFilter(cutoff_frequency_hz=120, gain_db=3, q=0.8),
+        Gain(gain_db=10), Distortion(drive_db=12),
+        HighShelfFilter(cutoff_frequency_hz=3000, gain_db=2),
+        *power_amp(presence_db=2),
+    ]
+    fx = [Reverb(room_size=0.3, damping=0.5, wet_level=0.14, dry_level=0.88, width=0.0)]
+    return pedals, amp, 5000, fx
+
+
+def albert_king():
+    pedals = [
+        NoiseGate(threshold_db=-62, ratio=3, release_ms=200),
+        # Thumb attack on a Flying V humbucker: heavy squeeze, dark and fat
+        Compressor(threshold_db=-28, ratio=4, attack_ms=8, release_ms=180),
+        PeakFilter(cutoff_frequency_hz=500, gain_db=4, q=0.7),
+        LowpassFilter(cutoff_frequency_hz=4500),
+    ]
+    # Solid-state Acoustic stack pushed into a thick, smooth overdrive
+    amp = [
+        Gain(gain_db=10), Distortion(drive_db=13),
+        PeakFilter(cutoff_frequency_hz=700, gain_db=2, q=0.7),
+        *power_amp(presence_db=1),
+    ]
+    fx = [Reverb(room_size=0.4, damping=0.55, wet_level=0.14, dry_level=0.88, width=0.0)]
+    return pedals, amp, 4500, fx
+
+
+def freddie_king():
+    pedals = [
+        NoiseGate(threshold_db=-62, ratio=3, release_ms=150),
+        # Metal finger picks on a Gibson: bright, snappy attack
+        PeakFilter(cutoff_frequency_hz=2500, gain_db=3, q=0.9),
+        PeakFilter(cutoff_frequency_hz=250, gain_db=-2, q=0.8),
+    ]
+    # Fender Quad Reverb run loud: clean-ish with an edge when you dig in
+    amp = [
+        PeakFilter(cutoff_frequency_hz=120, gain_db=3, q=0.8),
+        Gain(gain_db=8), Distortion(drive_db=9),
+        HighShelfFilter(cutoff_frequency_hz=3000, gain_db=2),
+        *power_amp(presence_db=2),
+    ]
+    fx = [Reverb(room_size=0.45, damping=0.5, wet_level=0.18, dry_level=0.86, width=0.0)]
+    return pedals, amp, 5500, fx
+
+
 def clean():
     pedals = [
         NoiseGate(threshold_db=-65, ratio=3, release_ms=150),
@@ -163,12 +259,17 @@ PRESETS = {
     "2": ("Hendrix", hendrix, -15.0),
     "3": ("Clapton", clapton, -17.0),
     "4": ("Slowhand", slowhand, -10.5),
+    "5": ("BB King", bb_king, 1.0),
+    "6": ("Howlin' Wolf", howlin_wolf, -16.0),
+    "7": ("Muddy Waters", muddy_waters, -16.0),
+    "8": ("Albert King", albert_king, -15.0),
+    "9": ("Freddie King", freddie_king, -14.0),
     "0": ("Clean", clean, 0.0),
 }
 
 # The TONE3000 plugin normalizes its own output, so a NAM amp needs a much smaller trim than the
 # built-in amp it replaces. Measured against the built-in presets with a synthetic strummed Strat.
-NAM_TRIM_DB = {"1": 0.0, "2": -1.5, "3": -1.5, "4": 1.5}
+NAM_TRIM_DB = {"1": 0.0, "2": -1.5, "3": -1.5, "4": 1.5, "5": 5.0, "6": 2.5, "7": 2.5, "8": -2.0, "9": 1.5}
 
 # What's in each preset, for the menu: (one-line vibe, pedals, built-in amp, effects)
 CHAIN_INFO = {
@@ -180,6 +281,16 @@ CHAIN_INFO = {
           "Neck pickup, tone on 0", "Cranked Marshall (built-in sim)", "Reverb"),
     "4": ("80s Clapton Strat: mid-boost, compressed, chorus",
           "Compressor > Mid-boost", "Marshall (built-in sim)", "Chorus > Delay > Reverb"),
+    "5": ("Lucille through a big clean Fender: Varitone sting, singing sustain",
+          "Compressor > Varitone", "Big clean Fender (built-in sim)", "Reverb"),
+    "6": ("Hubert Sumlin's raw finger-picked bite through a small amp on 10",
+          "Bridge pickup, fingers", "Small Fender on 10 (built-in sim)", "Slapback > Room"),
+    "7": ("Telecaster into a cranked Super Reverb, Chicago grit",
+          "Telecaster bridge", "Cranked Fender (built-in sim)", "Reverb"),
+    "8": ("Flying V, thick and squeezed, huge bends",
+          "Compressor > Fat mids", "Pushed solid-state (built-in sim)", "Reverb"),
+    "9": ("\"Hide Away\": finger picks into a loud Fender",
+          "Finger picks", "Loud Fender (built-in sim)", "Reverb"),
     "0": ("Fender clean",
           "Compressor", "Fender clean (built-in sim)", "Reverb"),
 }
@@ -522,15 +633,15 @@ def section(title):
 
 def chain_lines(chain, indent):
     """Two lines: what's making the core sound (amp + cab), then what's around it (pedals + effects)."""
-    return [f"{indent}amp    {chain['amp']:<52} cab  {chain['cab']}",
-            f"{indent}pedals {chain['pedals']:<52} fx   {chain['fx']}"]
+    return [f"{indent}amp    {chain['amp']:<57} cab  {chain['cab']}",
+            f"{indent}pedals {chain['pedals']:<57} fx   {chain['fx']}"]
 
 
 def menu(rig):
     lines = ["", "═" * WIDTH, "GUITAR RIG".center(WIDTH), "═" * WIDTH, section("TONES")]
     for k in [*sorted(k for k in PRESETS if k != "0"), "0"]:
-        lines.append(f"   {k}  {PRESETS[k][0]:<10}{CHAIN_INFO[k][0]}")
-        lines += chain_lines(rig.chains[k], " " * 16)
+        lines.append(f"   {k}  {PRESETS[k][0]:<14}{CHAIN_INFO[k][0]}")
+        lines += chain_lines(rig.chains[k], " " * 20)
     lines += [
         section("PLAYING"),
         "   [ / ]  input trim -/+ 3 dB (more = more drive)",
@@ -558,7 +669,7 @@ def announce(rig, key):
     sys.stdout.write("\r" + " " * 110 + "\r")
     first, second = chain_lines(rig.chains[key], "")
     head = f"▶ {key} {PRESETS[key][0]}"
-    print(f"{head:<16}{first}\n{'':<16}{second}")
+    print(f"{head:<20}{first}\n{'':<20}{second}")
 
 
 def main():
@@ -688,7 +799,7 @@ def main():
                 status = f"\r[{PRESETS[rig.current][0]}] " + scale_display(heard, SCALES[scale], root)
             else:
                 flag = "MUTED" if rig.muted else ""
-                status = (f"\r[{PRESETS[rig.current][0]:<8}] in{rig.input_channel + 1} {meter(rig.in_peak)} "
+                status = (f"\r[{PRESETS[rig.current][0]:<12}] in{rig.input_channel + 1} {meter(rig.in_peak)} "
                           f"out {meter(rig.out_peak)} trim {rig.input_trim_db:+.0f}dB vol {rig.master_db:+.0f}dB "
                           f"glitches {rig.xruns} {flag:<6}")
             sys.stdout.write(status.ljust(110))

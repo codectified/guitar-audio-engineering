@@ -7,7 +7,9 @@ Launch with `rig/Guitar Rig.bat` (or `python rig/rig.py`).
 
 Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite outs.
 
-- Presets: `1` SRV, `2` Hendrix, `3` Clapton (Cream "woman tone"), `4` Slowhand (80s Clapton), `0` Clean.
+- Presets: `1` SRV, `2` Hendrix, `3` Clapton (Cream "woman tone"), `4` Slowhand (80s Clapton),
+  `5` BB King, `6` Howlin' Wolf (Hubert Sumlin), `7` Muddy Waters, `8` Albert King, `9` Freddie King, `0` Clean.
+  The menu (`h`) shows each preset's pedals / amp (capture name) / cab / fx.
   Each preset = pedals → amp → cab → effects, levels matched to ~-15 dBFS RMS.
 - Tuner (`t`) with alternate tunings (`n`): Standard, Eb, Drop D, Open G, Open E, Open D, DADGAD, D Standard, Chromatic.
 - Scale trainer (`s` scale, `r` root): 16 maqams/ragas/Japanese/gamelan scales; prints an ASCII
@@ -64,6 +66,10 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - These states were made by splitting a 4-amp plugin preset (`%APPDATA%\TONE3000\Presets\custom.t3kpreset`)
   into one block each. Format: JUCE base64 VST3 state → `T3KB` + JUCE ValueTree; amps are
   `ChainSnapshot/ChainBlocks/ChainBlock` nodes with `type=nam`, `toneJson` and an embedded `ModelCache`.
+- Presets 5–9 (added 2026-10-03) got states built directly from capture files: copy a `type=nam`
+  ChainBlock, set `toneJson` (title, model id, file URL), `activeModelId`, and `ModelCache/CachedModel`
+  `modelId` + `data` (the raw .nam bytes, JUCE var marker 0x08). Verified by distortion on a sine
+  (the plugin's log is unreliable). So any capture can be wired in without the GUI.
 - The plugin normalizes its output, so NAM presets use `NAM_TRIM_DB` instead of the built-in trims.
   It reports 29 samples of latency, so its first block after a reset is short (padded in `run_board`).
 
