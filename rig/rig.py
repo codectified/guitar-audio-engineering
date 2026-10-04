@@ -34,7 +34,7 @@ NAM_DIR = HERE / "nam"
 NAM_PLUGIN = Path(r"C:\Program Files\Common Files\VST3\TONE3000.vst3\Contents\x86_64-win\TONE3000.vst3")
 
 SR = 48000  # replaced by the interface's native rate at startup
-GATE_FLOOR_MAX_DB = -50  # noise gates never close above this, whatever the noise measurement says
+GATE_FLOOR_MAX_DB = -58  # noise gates never close above this (soft playing sits around -50 dBFS)
 BLOCK = 128
 
 
@@ -537,8 +537,7 @@ class Rig:
 
     def set_gate_floor(self, noise_db):
         """Make every noise gate close above the measured hiss/hum, so silence stays silent."""
-        # Capped: real hiss/hum sits well below -50 dBFS. If you were playing during the measurement,
-        # an uncapped gate would swallow every note's attack and chop its tail.
+        # Capped: real hiss/hum sits well below this. A higher gate swallows soft notes and chops tails.
         floor = min(noise_db + 8, GATE_FLOOR_MAX_DB)
         for board in self.boards.values():
             for plugin in board:
@@ -701,19 +700,23 @@ def main():
         SR = int(sd.query_devices(in_dev)["default_samplerate"])
 
     def record(seconds):
+        """RMS level in dB of each 50 ms window, per input: shape (2, windows)."""
         x = sd.rec(int(seconds * SR), samplerate=SR, channels=2, device=in_dev, dtype="float32")
         sd.wait()
         hpf = Pedalboard([HighpassFilter(cutoff_frequency_hz=70), HighpassFilter(cutoff_frequency_hz=70)])
         x = hpf(x.T.copy(), SR)[:, SR // 4:]  # skip the filter settling
-        return 20 * np.log10(np.abs(x).max(axis=1) + 1e-9)  # peak dB per input
+        win = SR // 20
+        x = x[:, : x.shape[1] // win * win].reshape(2, -1, win)
+        return 10 * np.log10((x ** 2).mean(axis=2) + 1e-18)
 
     print("Measuring noise floor - keep your hands OFF the strings for 2 seconds...")
-    noise_db = record(2)
+    # The quietest windows are the real hiss/hum; a stray pluck or ringing string only lifts the loud ones.
+    noise_db = np.percentile(record(2), 20, axis=1)
     if args.input_channel:
         channel = args.input_channel - 1
     else:
         input("Now press Enter and strum the guitar hard for 3 seconds (stay quiet otherwise)...")
-        strum_db = record(3)
+        strum_db = record(3).max(axis=1)
         rise = strum_db - noise_db
         channel = int(np.argmax(rise))
         print(f"  input 1 jumped {rise[0]:+.0f} dB, input 2 jumped {rise[1]:+.0f} dB -> guitar is on input {channel + 1}")
