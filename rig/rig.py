@@ -34,6 +34,7 @@ NAM_DIR = HERE / "nam"
 NAM_PLUGIN = Path(r"C:\Program Files\Common Files\VST3\TONE3000.vst3\Contents\x86_64-win\TONE3000.vst3")
 
 SR = 48000  # replaced by the interface's native rate at startup
+GATE_FLOOR_MAX_DB = -50  # noise gates never close above this, whatever the noise measurement says
 BLOCK = 128
 
 
@@ -536,7 +537,9 @@ class Rig:
 
     def set_gate_floor(self, noise_db):
         """Make every noise gate close above the measured hiss/hum, so silence stays silent."""
-        floor = noise_db + 8
+        # Capped: real hiss/hum sits well below -50 dBFS. If you were playing during the measurement,
+        # an uncapped gate would swallow every note's attack and chop its tail.
+        floor = min(noise_db + 8, GATE_FLOOR_MAX_DB)
         for board in self.boards.values():
             for plugin in board:
                 if isinstance(plugin, NoiseGate):
@@ -721,6 +724,9 @@ def main():
     rig = Rig(input_channel=channel)
     gate_db = rig.set_gate_floor(noise_db[channel])
     print(f"Noise floor {noise_db[channel]:.0f} dBFS -> gates set to at least {gate_db:.0f} dBFS")
+    if noise_db[channel] + 8 > GATE_FLOOR_MAX_DB:
+        print(f"  That's loud for hiss - were the strings ringing? Gates capped at {GATE_FLOOR_MAX_DB} dBFS. "
+              "Restart with the strings muted if notes sound choked.")
     print("The mic on the other input is ignored. Headphones are still the safest bet with the mic plugged in.")
 
     stream = sd.Stream(samplerate=SR, blocksize=blocksize, device=(in_dev, out_dev), channels=(2, 2),
