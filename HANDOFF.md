@@ -8,7 +8,8 @@ Launch with `rig/Guitar Rig.bat` (or `python rig/rig.py`).
 Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite outs.
 
 - Presets: `1` SRV, `2` Hendrix, `3` Clapton (Cream "woman tone"), `4` Slowhand (80s Clapton),
-  `5` BB King, `6` Howlin' Wolf (Hubert Sumlin), `7` Muddy Waters, `8` Albert King, `9` Freddie King, `0` Clean.
+  `5` BB King, `6` Howlin' Wolf (Hubert Sumlin), `7` Muddy Waters, `8` Albert King, `9` Freddie King,
+  `d` Derek Trucks (SG + slide, pushed Super Reverb, tape echo; suggests Open E), `0` Clean.
   The menu (`h`) shows each preset's pedals / amp (capture name) / cab / fx.
   Each preset = pedals → amp → cab → effects, levels matched to ~-15 dBFS RMS.
 - Tuner (`t`) with alternate tunings (`n`): Standard, Eb, Drop D, Open G, Open E, Open D, DADGAD, D Standard, Chromatic.

@@ -238,6 +238,36 @@ def freddie_king():
     return pedals, amp, 5500, fx
 
 
+def derek_trucks():
+    pedals = [
+        NoiseGate(threshold_db=-66, ratio=2, release_ms=400),  # gentle and slow so slide tails float out
+        # No pedals on the real rig: an SG's humbuckers and bare fingers. The comp stands in for a
+        # loud amp's natural sustain, the mid push is the vocal quality of his slide lines.
+        Compressor(threshold_db=-26, ratio=2.5, attack_ms=20, release_ms=250),
+        PeakFilter(cutoff_frequency_hz=850, gain_db=4, q=0.7),
+        PeakFilter(cutoff_frequency_hz=200, gain_db=-2, q=0.8),
+        LowpassFilter(cutoff_frequency_hz=6000),
+    ]
+    # Super Reverb / Alessandro (half Dumble): pushed, smooth, singing
+    amp = [
+        PeakFilter(cutoff_frequency_hz=700, gain_db=3, q=0.7),
+        Gain(gain_db=10), Distortion(drive_db=11),
+        HighShelfFilter(cutoff_frequency_hz=3500, gain_db=-1),
+        *power_amp(presence_db=1),
+    ]
+    fx = [
+        # Echoplex-style: dark, soft repeats tucked under the note
+        Mix([
+            Gain(gain_db=0),
+            Pedalboard([Delay(delay_seconds=0.42, feedback=0.35, mix=1.0),
+                        LowpassFilter(cutoff_frequency_hz=2200), HighpassFilter(cutoff_frequency_hz=250),
+                        Gain(gain_db=-12)]),
+        ]),
+        Reverb(room_size=0.75, damping=0.6, wet_level=0.22, dry_level=0.85, width=0.0),
+    ]
+    return pedals, amp, 5000, fx
+
+
 def clean():
     pedals = [
         NoiseGate(threshold_db=-65, ratio=3, release_ms=150),
@@ -265,12 +295,13 @@ PRESETS = {
     "7": ("Muddy Waters", muddy_waters, -16.0),
     "8": ("Albert King", albert_king, -15.0),
     "9": ("Freddie King", freddie_king, -14.0),
+    "d": ("Derek Trucks", derek_trucks, -15.0),
     "0": ("Clean", clean, 0.0),
 }
 
 # The TONE3000 plugin normalizes its own output, so a NAM amp needs a much smaller trim than the
 # built-in amp it replaces. Measured against the built-in presets with a synthetic strummed Strat.
-NAM_TRIM_DB = {"1": 0.0, "2": -1.5, "3": -1.5, "4": 1.5, "5": 5.0, "6": 2.5, "7": 2.5, "8": -2.0, "9": 1.5}
+NAM_TRIM_DB = {"1": 0.0, "2": -1.5, "3": -1.5, "4": 1.5, "5": 5.0, "6": 2.5, "7": 2.5, "8": -2.0, "9": 1.5, "d": 3.5}
 
 # What's in each preset, for the menu: (one-line vibe, pedals, built-in amp, effects)
 CHAIN_INFO = {
@@ -292,6 +323,8 @@ CHAIN_INFO = {
           "Compressor > Fat mids", "Pushed solid-state (built-in sim)", "Reverb"),
     "9": ("\"Hide Away\": finger picks into a loud Fender",
           "Finger picks", "Loud Fender (built-in sim)", "Reverb"),
+    "d": ("SG + slide into a pushed Super Reverb: vocal, sustaining (try Open E: n)",
+          "Fingers, SG > Comp", "Pushed Super Reverb (built-in sim)", "Tape echo > Big reverb"),
     "0": ("Fender clean",
           "Compressor", "Fender clean (built-in sim)", "Reverb"),
 }
