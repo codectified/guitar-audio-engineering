@@ -550,6 +550,61 @@ def scale_display(freq, scale, root):
     return f"SCALE {scale[0]} on {root}  degree {i + 1} ({note:<3}) {off:+5.0f}c [{''.join(bar)}] {verdict}"
 
 
+class AutoWah:
+    """Envelope filter ("auto-wah"): a resonant band-pass whose centre follows how hard you pick.
+    It sits in front of every preset, like a pedal on the floor, so the amp distorts the quack."""
+    # input loudness (RMS dBFS, after the input trim) that sweeps the filter all the way up
+    SENSITIVITY = {"low": -18.0, "med": -26.0, "high": -34.0}
+    RANGE_DB = 24.0  # the sweep starts this far below that
+    LOW_HZ, HIGH_HZ = 350.0, 2400.0
+    ATTACK_S, RELEASE_S = 0.004, 0.15  # snaps open on the pick, closes as the note dies
+    CHUNK = 32  # retune the filter every 32 samples (0.7 ms) whatever the audio buffer size
+    MAKEUP_DB = 1.0  # evens out the level vs. the dry guitar (the resonant peak makes up most of the loss)
+    FADE_S = 0.01  # crossfade when switching on/off, so it doesn't click
+
+    def __init__(self):
+        self.on = False
+        self.sensitivity = "med"
+        self.mix = 0.0  # 0 = bypassed, 1 = fully on; ramps towards self.on
+        self.env_db = -120.0
+        self.cutoff_hz = self.LOW_HZ
+        self.filter = LadderFilter(mode=LadderFilter.Mode.BPF12, cutoff_hz=self.LOW_HZ, resonance=0.6, drive=1.0)
+        self.board = Pedalboard([self.filter])
+
+    def toggle(self):
+        self.on = not self.on
+        if self.on and self.mix == 0:
+            self.board.reset()
+            self.env_db = -120.0
+
+    def next_sensitivity(self):
+        names = list(self.SENSITIVITY)
+        self.sensitivity = names[(names.index(self.sensitivity) + 1) % len(names)]
+
+    def __call__(self, x):
+        """x: shape (1, frames). Returns the wah'd signal, same shape."""
+        target = 1.0 if self.on else 0.0
+        if self.mix == target == 0.0:
+            return x
+        top = self.SENSITIVITY[self.sensitivity]
+        wet = np.empty_like(x)
+        for start in range(0, x.shape[1], self.CHUNK):
+            seg = x[:, start:start + self.CHUNK]
+            level_db = 10 * np.log10(float(np.mean(seg ** 2)) + 1e-12)
+            tau = self.ATTACK_S if level_db > self.env_db else self.RELEASE_S
+            a = np.exp(-seg.shape[1] / (SR * tau))
+            self.env_db = a * self.env_db + (1 - a) * level_db
+            pos = np.clip((self.env_db - (top - self.RANGE_DB)) / self.RANGE_DB, 0.0, 1.0)
+            self.cutoff_hz = self.LOW_HZ * (self.HIGH_HZ / self.LOW_HZ) ** pos
+            self.filter.cutoff_hz = self.cutoff_hz
+            wet[:, start:start + seg.shape[1]] = self.board(seg, SR, reset=False)
+        wet *= 10 ** (self.MAKEUP_DB / 20)
+        step = np.arange(1, x.shape[1] + 1) / (self.FADE_S * SR)
+        ramp = np.clip(self.mix + step if target else self.mix - step, 0.0, 1.0).astype(np.float32)
+        self.mix = float(ramp[-1])
+        return (x * (1 - ramp) + wet * ramp).astype(np.float32)
+
+
 class Rig:
     def __init__(self, input_channel=0):
         self.boards, self.chains, self.trims = {}, {}, {}
@@ -568,6 +623,7 @@ class Rig:
         # kill sub-bass rumble before it gets distorted into mush
         self.input_hpf = Pedalboard([HighpassFilter(cutoff_frequency_hz=70), HighpassFilter(cutoff_frequency_hz=70)])
         self.limiter = Pedalboard([Limiter(threshold_db=-1.0, release_ms=50)])  # protects your ears
+        self.wah = AutoWah()
         self.in_peak = 0.0
         self.out_peak = 0.0
         self.xruns = 0
@@ -604,6 +660,7 @@ class Rig:
         x = raw * 10 ** (self.input_trim_db / 20)
         x = self.input_hpf(x[np.newaxis, :], SR, reset=False)
         self.in_peak = max(self.in_peak * 0.9, float(np.abs(x).max()))
+        x = self.wah(x)
 
         y = self.run_board(self.current, x)
         fade_len = int(0.03 * SR)  # 30 ms crossfade when switching presets
@@ -687,6 +744,8 @@ def menu(rig):
         "   - / +  master volume -/+ 3 dB",
         "   m      mute / unmute  (hit this if it ever starts howling)",
         "   i      swap input channel (auto-detected at startup by strumming)",
+        "   w      auto-wah on/off: an envelope filter in front of the amp (pick harder = more quack)",
+        "   e      auto-wah sensitivity: low / med / high (try high for soft or clean playing)",
         section("TUNER"),
         "   t      tuner on/off (mutes the output while tuning)",
         *textwrap.wrap("next tuning: " + ", ".join(t[0].split(" (")[0] for t in TUNINGS), WIDTH - 10,
@@ -855,6 +914,12 @@ def main():
                     rig.muted = not rig.muted
                 elif k == "i":
                     rig.input_channel = 1 - rig.input_channel
+                elif k == "w":
+                    rig.wah.toggle()
+                elif k == "e":
+                    rig.wah.next_sensitivity()
+                    if not rig.wah.on:  # changing the sensitivity means you want to hear it
+                        rig.wah.toggle()
             if rig.tuner or rig.listen:
                 freq = detect_pitch(rig.tuner_buf.astype(np.float64), SR)
                 readings = (readings + [freq])[-5:] if freq else []
@@ -864,10 +929,10 @@ def main():
             elif scale is not None:
                 status = f"\r[{PRESETS[rig.current][0]}] " + scale_display(heard, SCALES[scale], root)
             else:
-                flag = "MUTED" if rig.muted else ""
+                flag = "MUTED" if rig.muted else (f"wah:{rig.wah.sensitivity}" if rig.wah.on else "")
                 status = (f"\r[{PRESETS[rig.current][0]:<12}] in{rig.input_channel + 1} {meter(rig.in_peak)} "
                           f"out {meter(rig.out_peak)} trim {rig.input_trim_db:+.0f}dB vol {rig.master_db:+.0f}dB "
-                          f"glitches {rig.xruns} {flag:<6}")
+                          f"glitches {rig.xruns} {flag:<8}")
             sys.stdout.write(status.ljust(110))
             sys.stdout.flush()
             time.sleep(0.05)
