@@ -58,7 +58,10 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
   preset switching OK, <10% CPU at a 64-sample buffer. **Not yet heard on the real guitar.**
 - **Heard on the real guitar (2026-10-03/04):** "sounds awesome" with NAM amps. Presets 5–9 and `d`
   are newer; ask how they sound.
-- **Untested live:** the restart/quit flag files and the record timeout (logic tested with fakes only).
+- **Untested live:** the restart/quit flag files (logic tested with fakes only).
+- **Record timeout, fixed live 2026-10-05:** its polling loop replaced `sd.wait()`, which also *closed* the
+  recording stream; left open, it held the single-client ASIO driver, so the main stream failed with
+  "Device unavailable [-9985]". `record()` now calls `sd.stop()` after the loop. Rig ran fine after.
 - **Untested:** cab IR loading from a real IR file (tested with a synthetic IR only).
 
 ## Next steps

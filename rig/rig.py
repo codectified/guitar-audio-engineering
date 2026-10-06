@@ -749,7 +749,8 @@ def main():
                 sys.exit("No audio is coming from the interface. Unplug the Focusrite's USB cable, wait 10 s, "
                          "plug it back in, then start the rig again.")
             sd.sleep(50)
-        hpf = Pedalboard([HighpassFilter(cutoff_frequency_hz=70), HighpassFilter(cutoff_frequency_hz=70)])
+        sd.stop()  # closes the recording stream (sd.wait() used to); ASIO allows only one open stream
+        hpf =Pedalboard([HighpassFilter(cutoff_frequency_hz=70), HighpassFilter(cutoff_frequency_hz=70)])
         x = hpf(x.T.copy(), SR)[:, SR // 4:]  # skip the filter settling
         win = SR // 20
         x = x[:, : x.shape[1] // win * win].reshape(2, -1, win)
