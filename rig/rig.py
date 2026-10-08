@@ -13,6 +13,7 @@ import argparse
 import os
 import msvcrt
 import re
+import shutil
 import sys
 import textwrap
 import time
@@ -763,17 +764,39 @@ def menu(rig):
     return "\n".join(lines)
 
 
-def announce(rig, key):
+# Console rows the last announcement took while it's still right above the status line (0 once anything
+# else is printed below it), so switching presets can overwrite it instead of scrolling a history.
+_announce_rows = 0
+
+
+def announce(rig, key, replace=False):
     """Print which tone is now active, above the live status line."""
+    global _announce_rows
     sys.stdout.write("\r" + " " * 110 + "\r")
+    if replace and _announce_rows:
+        sys.stdout.write(f"\x1b[{_announce_rows}F\x1b[J")  # back up over the old announcement and clear it
     first, second = chain_lines(rig.chains[key], "")
     head = f"▶ {key} {PRESETS[key][0]}"
-    print(f"{head:<20}{first}\n{'':<20}{second}")
+    lines = [f"{head:<20}{first}", f"{'':<20}{second}"]
+    print("\n".join(lines))
+    cols = shutil.get_terminal_size().columns
+    _announce_rows = sum(max(1, -(-len(line) // cols)) for line in lines)
+
+
+def enable_ansi():
+    """Let the classic Windows console understand cursor-movement escape codes (Windows Terminal already does)."""
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+    mode = ctypes.c_uint32()
+    if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+        kernel32.SetConsoleMode(handle, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
 
 
 def main():
-    global SR
+    global SR, _announce_rows
     sys.stdout.reconfigure(errors="replace")  # box-drawing characters on consoles that can't show them
+    enable_ansi()
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", default="Focusrite", help="part of the audio interface name")
     ap.add_argument("--input-channel", type=int, choices=[1, 2], help="skip auto-detect and use this input")
@@ -852,6 +875,8 @@ def main():
         root = None
 
         def show_scale():
+            global _announce_rows
+            _announce_rows = 0
             sys.stdout.write("\r" + " " * 110 + "\r")
             print(fretboard(SCALES[scale], root, TUNINGS[tuning]) + "\n")
 
@@ -874,7 +899,7 @@ def main():
                 if k in PRESETS:
                     if k != rig.current:
                         rig.switch(k)
-                        announce(rig, k)
+                        announce(rig, k, replace=True)
                 elif k == "h":
                     sys.stdout.write("\r" + " " * 110 + "\r")
                     print(menu(rig))
@@ -892,6 +917,7 @@ def main():
                     scale = 0 if scale is None else scale + 1
                     if scale >= len(SCALES):
                         scale = None
+                        _announce_rows = 0
                         print("\nScale trainer off.")
                     else:
                         root = SCALES[scale][2]

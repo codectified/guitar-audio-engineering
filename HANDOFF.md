@@ -22,6 +22,20 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
   message instead of hanging if the interface stops delivering audio.
 - `x` restarts in place (exit code 11/12 → `Guitar Rig.bat` relaunches with `--input-channel`).
 
+## 2026-10-07
+
+- Repo is public for Omar's friends. `rig/nam/` (preset states + captures, ~10 MB) is now committed with
+  creator credits in README; README has a clone-and-play quick start and `requirements.txt`. The TONE3000
+  plugin itself is not committed (third-party binary, no redistribution license); README links it.
+  Untested: whether the committed `.state` files load on another machine (they embed the model, so they should).
+- Preset switches now overwrite the previous two-line announcement in place (ANSI cursor-up; `enable_ansi()`
+  turns on VT processing for the classic console). Verified live in Windows Terminal.
+- "Stuck in tuner" report: not a bug. The tuner (`t`, or `n`) mutes output, and keys only reach the rig while its
+  window is focused. Pressing `t` turned it off.
+- Latency read 89.8 ms after the 2026-10-06 blue screen/reboot (was ~22 ms): Focusrite buffer likely reset.
+- 2026-10-06 17:13 the PC blue-screened (0x1A MEMORY_MANAGEMENT); also port exhaustion and Wi-Fi driver
+  failures that day. No USB/Focusrite errors. The rig has no log and no dead-stream watchdog; Omar declined both for now.
+
 ## Hardware facts (learned the hard way)
 
 - **Input 1 = microphone, input 2 = guitar.** Reading the mic caused a howling feedback loop.

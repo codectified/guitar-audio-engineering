@@ -4,8 +4,6 @@ __pycache__/
 rig/demo_*.wav
 # third-party installer, re-download from neuralampmodeler.com
 rig/plugins/
-# per-machine NAM plugin state
-rig/nam/
 # signal files a running rig watches for (clean restart/quit)
 rig/restart.flag
 rig/quit.flag
