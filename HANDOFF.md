@@ -72,7 +72,13 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
   preset switching OK, <10% CPU at a 64-sample buffer. **Not yet heard on the real guitar.**
 - **Heard on the real guitar (2026-10-03/04):** "sounds awesome" with NAM amps. Presets 5–9 and `d`
   are newer; ask how they sound.
-- **Restart flag verified live 2026-10-05** (`rig/restart.flag` → clean exit, bat relaunched). Quit flag untested.
+- **Restart flag verified live 2026-10-05** (`rig/restart.flag` → clean exit, bat relaunched).
+  **Quit flag verified live 2026-10-11** (exited within 4 s, flag consumed).
+- **2026-10-11 output dropout, unresolved:** after ~12.5 h running, guitar output went silent while the
+  Scarlett and the rig's meters still showed signal; the rig was still using ~8% CPU, the Focusrite was
+  OK in Windows, and the system log had no errors. Omar's checks didn't fix it, so the rig was shut down
+  via `quit.flag`. Cause unknown; maybe the ASIO output stalls on long runs (cf. the 8 h ASMedia crash).
+  Also: 2026-10-10 11:41 another 0x1A MEMORY_MANAGEMENT bugcheck (same 0x1230 arg as 2026-10-06); suggested `mdsched`.
 - **Auto-wah (2026-10-05):** `w` on/off, `e` sensitivity low/med/high. `AutoWah` in rig.py sits after the
   input HPF, in front of every preset: envelope follower (4 ms attack / 150 ms release) sweeping a
   `LadderFilter` BPF12 (res 0.6) 350–2400 Hz, retuned every 32 samples so the buffer size doesn't matter.
