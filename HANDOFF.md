@@ -129,5 +129,10 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 ## Gotchas
 
 - The old copy at `C:\Users\andre\guitar-rig` is the pre-move original; this repo is now canonical.
+  A stale `OneDrive\Desktop\Guitar Rig.bat` (from that copy) launches the old rig or fails. Both should be
+  deleted (asked 2026-10-17; the delete was blocked by the permission check, pending Omar).
+- Shortcuts (2026-10-14): `Guitar Rig.lnk` in the Start menu and on `OneDrive\Desktop` →
+  `cmd.exe /c "...\rig\Guitar Rig.bat" --input-channel 2`. Start-search right-click lacks "Pin to taskbar";
+  pin the desktop one via drag or Show more options.
 - An automatic feedback-detector was tried and removed: it couldn't tell a howl from sustained fuzz.
 - Long bash heredocs with mixed `'''` quoting got mangled once; prefer the Edit tool for multi-line patches.
