@@ -41,6 +41,20 @@ rig's window is focused.
 | `s` / `r` | scale trainer: next scale / next root |
 | `x` / `q` | restart / quit |
 
+## Quick start (Mac)
+
+Clone the repo as above, then double-click **`rig/Guitar Rig.command`** (or run it from Terminal). The first
+run sets up a Python environment in `.venv/` (needs Python 3.11+, e.g. `brew install python`). The first time,
+macOS asks to let Terminal use the microphone: say yes, or the rig hears silence.
+
+- **Scarlett Solo:** picked automatically, about 8 ms round trip.
+- **Positive Grid Spark GO:** also works (guitar in and sound out over its USB cable), but about 35 ms round trip,
+  so the Scarlett is better for real playing. Put the Spark on a clean preset so you don't hear its amp on top.
+- The rig runs at the interface's own sample rate on a Mac. If a Scarlett is set to 192 kHz in
+  Audio MIDI Setup, that works but uses 4x the CPU; 48 kHz is plenty.
+- NAM amp captures need the TONE3000 plugin installed at `/Library/Audio/Plug-Ins/VST3/TONE3000.vst3`.
+  Not tested on a Mac yet; without it, the presets use their built-in amp sims.
+
 ### If your interface isn't a Focusrite
 
 `python rig/rig.py --device "part of your interface's name"`. Run

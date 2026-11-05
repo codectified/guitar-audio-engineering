@@ -36,6 +36,19 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - 2026-10-06 17:13 the PC blue-screened (0x1A MEMORY_MANAGEMENT); also port exhaustion and Wi-Fi driver
   failures that day. No USB/Focusrite errors. The rig has no log and no dead-stream watchdog; Omar declined both for now.
 
+## Mac port (2026-11-05)
+
+- `rig.py` runs on macOS too: terminal keys via termios (`keypresses()`), `enable_ansi()` is a no-op, Core Audio
+  device picking (Scarlett, or the Spark GO's separate 1-in / 2-out devices), status line clipped to the
+  terminal width (padding to 110 wrapped and scrolled in narrow windows). Launcher: `rig/Guitar Rig.command`
+  (makes `.venv/` on first run, same x-restart loop as the .bat).
+- Core Audio runs at the device's own rate: forcing 48 kHz on the Spark GO (44.1 only) resampled, added
+  latency and dropped out. Scarlett: `latency=0.003` gives ~8 ms at its native rate (it defaulted to 192 kHz);
+  Spark GO: blocksize 64 + "low" gives ~35 ms, stable (smaller dropped out).
+- Verified live on the Spark GO via a scripted pseudo-terminal: startup, presets, `h`, `w`, `m`, `q` (exit 0),
+  `x` (exit 11). Not verified: by ear on the Mac; whether the Spark's USB input is dry; TONE3000 on macOS and
+  whether the Windows-made `.state` files load there.
+
 ## Hardware facts (learned the hard way)
 
 - **Input 1 = microphone, input 2 = guitar.** Reading the mic caused a howling feedback loop.

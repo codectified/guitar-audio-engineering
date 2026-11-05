@@ -10,8 +10,8 @@ Real amp captures (optional):
                                 .nam capture onto a chain block, close the window, and preset 1 uses it
 """
 import argparse
+import contextlib
 import os
-import msvcrt
 import re
 import shutil
 import sys
@@ -19,7 +19,13 @@ import textwrap
 import time
 from pathlib import Path
 
-os.environ.setdefault("SD_ENABLE_ASIO", "1")  # must be set before sounddevice loads PortAudio
+if sys.platform == "win32":
+    import msvcrt
+    os.environ.setdefault("SD_ENABLE_ASIO", "1")  # must be set before sounddevice loads PortAudio
+else:
+    import select
+    import termios
+    import tty
 
 import numpy as np
 import sounddevice as sd
@@ -32,7 +38,8 @@ IR_DIR = HERE / "irs"
 NAM_DIR = HERE / "nam"
 # TONE3000's plugin (the NAM author's "Gateway" build) reads the newer A2 captures; the old
 # NeuralAmpModeler 0.7.13 can't. Point at the binary inside the bundle: pedalboard can't scan the folder.
-NAM_PLUGIN = Path(r"C:\Program Files\Common Files\VST3\TONE3000.vst3\Contents\x86_64-win\TONE3000.vst3")
+NAM_PLUGIN = (Path(r"C:\Program Files\Common Files\VST3\TONE3000.vst3\Contents\x86_64-win\TONE3000.vst3")
+              if sys.platform == "win32" else Path("/Library/Audio/Plug-Ins/VST3/TONE3000.vst3"))
 
 SR = 48000  # replaced by the interface's native rate at startup
 # Exit code 11/12 = "restart me on input 1/2"; Guitar Rig.bat watches for it.
@@ -688,7 +695,15 @@ def find_device(name_part, kind, hostapi_name):
 
 
 def pick_devices(name):
-    """Best driver first: ASIO (one shared clock, so latency can't creep), then kernel streaming, then WASAPI."""
+    """Best driver first: ASIO (one shared clock, so latency can't creep), then kernel streaming, then WASAPI.
+    On a Mac it's Core Audio, where the interface shows up as e.g. "Scarlett Solo USB". Some USB amps
+    (Spark GO) show up as a separate input device and output device with the same name."""
+    if sys.platform == "darwin":
+        for part in [name] + (["Scarlett", "Spark"] if name == "Focusrite" else []):
+            dev_in, dev_out = find_device(part, "input", "Core Audio"), find_device(part, "output", "Core Audio")
+            if dev_in is not None and dev_out is not None:
+                return dev_in, dev_out, "Core Audio", BLOCK
+        return None, None, "Core Audio", BLOCK
     asio = find_device(name, "input", "ASIO")
     if asio is not None:
         return asio, asio, "ASIO", 0  # blocksize 0 = follow the buffer size set in the Focusrite control panel
@@ -772,7 +787,7 @@ _announce_rows = 0
 def announce(rig, key, replace=False):
     """Print which tone is now active, above the live status line."""
     global _announce_rows
-    sys.stdout.write("\r" + " " * 110 + "\r")
+    sys.stdout.write("\r\x1b[K")
     if replace and _announce_rows:
         sys.stdout.write(f"\x1b[{_announce_rows}F\x1b[J")  # back up over the old announcement and clear it
     first, second = chain_lines(rig.chains[key], "")
@@ -783,8 +798,35 @@ def announce(rig, key, replace=False):
     _announce_rows = sum(max(1, -(-len(line) // cols)) for line in lines)
 
 
+@contextlib.contextmanager
+def keypresses():
+    """Yields a function returning the keys pressed since the last call, without waiting for Enter."""
+    if sys.platform == "win32":
+        def read():
+            keys = []
+            while msvcrt.kbhit():
+                keys.append(msvcrt.getwch())
+            return keys
+        yield read
+        return
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    tty.setcbreak(fd)
+    try:
+        def read():
+            keys = []
+            while select.select([sys.stdin], [], [], 0)[0]:
+                keys.append(sys.stdin.read(1))
+            return keys
+        yield read
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
 def enable_ansi():
     """Let the classic Windows console understand cursor-movement escape codes (Windows Terminal already does)."""
+    if sys.platform != "win32":
+        return  # mac/Linux terminals already do
     import ctypes
     kernel32 = ctypes.windll.kernel32
     handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
@@ -814,16 +856,21 @@ def main():
         sys.exit(f"Couldn't find an audio device matching '{args.device}'. Devices:\n{sd.query_devices()}")
     # 48 kHz matches Windows' shared-mode rate (opening ASIO at 44.1 kHz switches the interface's clock
     # under Windows and garbles other audio until a reboot) and the NAM captures' own rate.
+    n_in = min(2, sd.query_devices(in_dev)["max_input_channels"])  # Scarlett: mic + guitar; Spark GO: guitar only
+    print(f"Input: {sd.query_devices(in_dev)['name']}  ->  output: {sd.query_devices(out_dev)['name']}")
     SR = 48000
     try:
-        sd.check_input_settings(device=in_dev, channels=2, samplerate=SR, dtype="float32")
+        sd.check_input_settings(device=in_dev, channels=n_in, samplerate=SR, dtype="float32")
         sd.check_output_settings(device=out_dev, channels=2, samplerate=SR, dtype="float32")
     except Exception:
         SR = int(sd.query_devices(in_dev)["default_samplerate"])
+    if driver == "Core Audio":
+        # No clock trouble on a Mac, but resampling to 48 kHz adds ~20 ms and drops out on a Spark GO (44.1 only)
+        SR = int(sd.query_devices(in_dev)["default_samplerate"])
 
     def record(seconds):
-        """RMS level in dB of each 50 ms window, per input: shape (2, windows)."""
-        x = sd.rec(int(seconds * SR), samplerate=SR, channels=2, device=in_dev, dtype="float32")
+        """RMS level in dB of each 50 ms window, per input: shape (inputs, windows)."""
+        x = sd.rec(int(seconds * SR), samplerate=SR, channels=n_in, device=in_dev, dtype="float32")
         deadline = time.time() + seconds + 3
         while sd.get_stream().active:  # sd.wait() hangs forever if the interface has dropped off USB
             if time.time() > deadline:
@@ -835,20 +882,21 @@ def main():
         hpf =Pedalboard([HighpassFilter(cutoff_frequency_hz=70), HighpassFilter(cutoff_frequency_hz=70)])
         x = hpf(x.T.copy(), SR)[:, SR // 4:]  # skip the filter settling
         win = SR // 20
-        x = x[:, : x.shape[1] // win * win].reshape(2, -1, win)
+        x = x[:, : x.shape[1] // win * win].reshape(n_in, -1, win)
         return 10 * np.log10((x ** 2).mean(axis=2) + 1e-18)
 
     print("Measuring noise floor - keep your hands OFF the strings for 2 seconds...")
     # The quietest windows are the real hiss/hum; a stray pluck or ringing string only lifts the loud ones.
     noise_db = np.percentile(record(2), 20, axis=1)
     if args.input_channel:
-        channel = args.input_channel - 1
+        channel = min(args.input_channel, n_in) - 1
     else:
         input("Now press Enter and strum the guitar hard for 3 seconds (stay quiet otherwise)...")
         strum_db = record(3).max(axis=1)
         rise = strum_db - noise_db
         channel = int(np.argmax(rise))
-        print(f"  input 1 jumped {rise[0]:+.0f} dB, input 2 jumped {rise[1]:+.0f} dB -> guitar is on input {channel + 1}")
+        print("  " + ", ".join(f"input {i + 1} jumped {r:+.0f} dB" for i, r in enumerate(rise))
+              + f" -> guitar is on input {channel + 1}")
         if rise[channel] < 15:
             sys.exit("Didn't hear the guitar clearly. Check the cable / INST button / gain knob, "
                      "or force it with: python rig.py --input-channel 2")
@@ -859,13 +907,19 @@ def main():
     if noise_db[channel] + 8 > GATE_FLOOR_MAX_DB:
         print(f"  That's loud for hiss - were the strings ringing? Gates capped at {GATE_FLOOR_MAX_DB} dBFS. "
               "Restart with the strings muted if notes sound choked.")
-    print("The mic on the other input is ignored. Headphones are still the safest bet with the mic plugged in.")
+    if n_in == 2:
+        print("The mic on the other input is ignored. Headphones are still the safest bet with the mic plugged in.")
 
-    stream = sd.Stream(samplerate=SR, blocksize=blocksize, device=(in_dev, out_dev), channels=(2, 2),
-                       dtype="float32", latency="low", callback=rig.callback)
+    latency = "low"
+    if driver == "Core Audio" and in_dev == out_dev:
+        latency = 0.003  # Core Audio's "low" is ~20 ms; asking for 3 ms gets ~8 ms round trip on a Scarlett
+    elif driver == "Core Audio":
+        blocksize = 64  # split in/out devices (Spark GO): smaller buffers drop out, this is ~35 ms and stable
+    stream = sd.Stream(samplerate=SR, blocksize=blocksize, device=(in_dev, out_dev), channels=(n_in, 2),
+                       dtype="float32", latency=latency, callback=rig.callback)
 
     print(menu(rig))
-    with stream:
+    with stream, keypresses() as pressed:
         print(f"Driver: {driver} @ {SR} Hz, latency {(stream.latency[0] + stream.latency[1]) * 1000:.1f} ms round trip"
               + ("  (lower the buffer size in Focusrite Control to cut this)" if driver == "ASIO" else "") + "\n")
         announce(rig, rig.current)
@@ -877,7 +931,7 @@ def main():
         def show_scale():
             global _announce_rows
             _announce_rows = 0
-            sys.stdout.write("\r" + " " * 110 + "\r")
+            sys.stdout.write("\r\x1b[K")
             print(fretboard(SCALES[scale], root, TUNINGS[tuning]) + "\n")
 
         while True:
@@ -888,8 +942,8 @@ def main():
                     flag.unlink(missing_ok=True)
                     print(f"\n{'Restarting' if code else 'Quitting'} ({flag.name} found)...")
                     return code
-            while msvcrt.kbhit():
-                k = msvcrt.getwch().lower()
+            for k in pressed():
+                k = k.lower()
                 if k == "q":
                     print()
                     return
@@ -901,7 +955,7 @@ def main():
                         rig.switch(k)
                         announce(rig, k, replace=True)
                 elif k == "h":
-                    sys.stdout.write("\r" + " " * 110 + "\r")
+                    sys.stdout.write("\r\x1b[K")
                     print(menu(rig))
                     announce(rig, rig.current)
                 elif k == "t":
@@ -938,7 +992,7 @@ def main():
                     rig.master_db = min(rig.master_db + 3, 6)
                 elif k == "m":
                     rig.muted = not rig.muted
-                elif k == "i":
+                elif k == "i" and n_in == 2:
                     rig.input_channel = 1 - rig.input_channel
                 elif k == "w":
                     rig.wah.toggle()
@@ -959,7 +1013,9 @@ def main():
                 status = (f"\r[{PRESETS[rig.current][0]:<12}] in{rig.input_channel + 1} {meter(rig.in_peak)} "
                           f"out {meter(rig.out_peak)} trim {rig.input_trim_db:+.0f}dB vol {rig.master_db:+.0f}dB "
                           f"glitches {rig.xruns} {flag:<8}")
-            sys.stdout.write(status.ljust(110))
+            # never let the status line wrap, or "\r" can't get back to its start and it scrolls instead
+            width = shutil.get_terminal_size().columns - 1
+            sys.stdout.write(status[:width + 1] + "\x1b[K")
             sys.stdout.flush()
             time.sleep(0.05)
 
