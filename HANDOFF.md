@@ -134,5 +134,22 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - Shortcuts (2026-10-14): `Guitar Rig.lnk` in the Start menu and on `OneDrive\Desktop` →
   `cmd.exe /c "...\rig\Guitar Rig.bat" --input-channel 2`. Start-search right-click lacks "Pin to taskbar";
   pin the desktop one via drag or Show more options.
+- 2026-10-19: the Scarlett is still plugged into an **ASMedia** port (root hub under the ASMedia controller), not Intel.
+  Windows audio was buggy after a rig quit; all USB controllers reported OK. Claude's shell isn't admin, so a
+  controller reset (`pnputil /restart-device`) needs Omar at the PC for the UAC prompt.
+- 2026-10-20: **ASMedia controller crashed again** (Device Manager: Error), second time after 10-04. The Scarlett
+  dropped out entirely and the rig process had exited. Replugging into the same port didn't bring it back.
+  The elevated `pnputil /restart-device` brought the controller back to OK, but the Scarlett still didn't reappear
+  (20 s wait). By 2026-10-24 the controller was in Error again, so Omar rebooted (last boot before that: 10-18).
+- Running the reset from Claude's non-admin shell: `Start-Process powershell -Verb RunAs` plus `-EncodedCommand`
+  (base64 UTF-16). Passing the command as plain `-Command` args fails (exit 1) because the `&`s in the instance
+  ID break apart. Omar has to click the UAC prompt.
+- Port options (unresolved): Omar says the PC has **only one USB-C port** (the ASMedia one) and "we tried USB once
+  and it sucked". Suggested a USB-C-to-A cable into an Intel USB-A port (the Scarlett is USB 2.0, and the bad
+  result may date from the WASAPI days), or the **NVIDIA USB 3.10 controller** (probably a USB-C port on the GPU).
+  Neither tried yet.
+- If `Guitar Rig.bat` is left sitting at `pause` after a quit, it's safe to close: it holds no audio stream.
+  Restart options given to Omar: `x` in the rig, `q` + shortcut, or ask Claude (flags). There are no voice commands;
+  Windows Voice Access ("open Guitar Rig", "press x") was suggested but not tested.
 - An automatic feedback-detector was tried and removed: it couldn't tell a howl from sustained fuzz.
 - Long bash heredocs with mixed `'''` quoting got mangled once; prefer the Edit tool for multi-line patches.
