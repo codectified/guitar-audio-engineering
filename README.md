@@ -52,7 +52,8 @@ macOS asks to let Terminal use the microphone: say yes, or the rig hears silence
   so the Scarlett is better for real playing. Put the Spark on a clean preset so you don't hear its amp on top.
 - The rig runs at the interface's own sample rate on a Mac. If a Scarlett is set to 192 kHz in
   Audio MIDI Setup, that works but uses 4x the CPU; 48 kHz is plenty.
-- NAM amp captures need the TONE3000 plugin installed at `/Library/Audio/Plug-Ins/VST3/TONE3000.vst3`.
+- NAM amp captures need the free **Gateway** plugin (the Mac name for the TONE3000 plugin): the macOS installer
+  on [neuralampmodeler.com/users](https://neuralampmodeler.com/users) puts it at `/Library/Audio/Plug-Ins/VST3/Gateway.vst3`.
   Not tested on a Mac yet; without it, the presets use their built-in amp sims.
 
 ### If your interface isn't a Focusrite

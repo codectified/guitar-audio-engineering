@@ -39,7 +39,11 @@ NAM_DIR = HERE / "nam"
 # TONE3000's plugin (the NAM author's "Gateway" build) reads the newer A2 captures; the old
 # NeuralAmpModeler 0.7.13 can't. Point at the binary inside the bundle: pedalboard can't scan the folder.
 NAM_PLUGIN = (Path(r"C:\Program Files\Common Files\VST3\TONE3000.vst3\Contents\x86_64-win\TONE3000.vst3")
-              if sys.platform == "win32" else Path("/Library/Audio/Plug-Ins/VST3/TONE3000.vst3"))
+              if sys.platform == "win32" else
+              # the same plugin's Mac installer (neuralampmodeler.com/users) names it Gateway.vst3
+              next((p for p in (Path("/Library/Audio/Plug-Ins/VST3/TONE3000.vst3"),
+                                Path("/Library/Audio/Plug-Ins/VST3/Gateway.vst3")) if p.exists()),
+                   Path("/Library/Audio/Plug-Ins/VST3/Gateway.vst3")))
 
 SR = 48000  # replaced by the interface's native rate at startup
 # Exit code 11/12 = "restart me on input 1/2"; Guitar Rig.bat watches for it.
