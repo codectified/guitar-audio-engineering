@@ -48,6 +48,15 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - Verified live on the Spark GO via a scripted pseudo-terminal: startup, presets, `h`, `w`, `m`, `q` (exit 0),
   `x` (exit 11). Not verified: by ear on the Mac; whether the Spark's USB input is dry; TONE3000 on macOS and
   whether the Windows-made `.state` files load there.
+- **NAM on the Mac (2026-11-05):** the Mac installer of the plugin (neuralampmodeler.com/users, "Gateway" v1.0.1)
+  installs `/Library/Audio/Plug-Ins/VST3/Gateway.vst3`. It is the classic NAM plugin format, not the Windows
+  TONE3000 chain format: it **rejects the Windows `.state` files** (falls back to a blank state, clean passthrough).
+  Its state stores the capture's *path*, so `load_nam()` reads the capture title from the Windows state,
+  finds the matching file in `nam/captures/` (`find_capture`) and builds a Gateway state (`gateway_state`).
+  Verified offline: all 10 presets load their capture and distort a sine (THD 0.26-0.41). `--setup-nam` on a
+  Mac would save a Gateway state that the Windows plugin can't read, so make new presets on the PC.
+- Levels with Gateway on a synthetic pluck: -24 dB (Hendrix) to -34 dB (Muddy) vs Clean -33.5; `NAM_TRIM_DB`
+  was measured with the Windows plugin and a different test signal. Not retuned; check by ear.
 
 ## Hardware facts (learned the hard way)
 

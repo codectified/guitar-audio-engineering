@@ -348,18 +348,52 @@ CHAIN_INFO = {
 _JUCE_B64 = ".ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+"
 
 
-def nam_capture_name(state):
-    """The capture's title from a saved TONE3000 plugin state (JUCE's own base64 inside VST3 XML)."""
-    m = re.search(rb"<IComponent>(\d+)\.([^<]*)</IComponent>", state)
+_COMPONENT_RE = re.compile(rb"<IComponent>(\d+)\.([^<]*)</IComponent>")
+
+
+def juce_decode(state):
+    """The plugin's own state bytes from a VST3 state (JUCE's own base64 inside XML), or None."""
+    m = _COMPONENT_RE.search(state)
     if not m:
         return None
     lookup = np.full(256, 0, np.uint8)
     lookup[np.frombuffer(_JUCE_B64.encode(), np.uint8)] = np.arange(64, dtype=np.uint8)
     sixes = lookup[np.frombuffer(m.group(2), np.uint8)]
     bits = np.unpackbits(sixes[:, None], axis=1, bitorder="little")[:, :6].ravel()
-    data = np.packbits(bits, bitorder="little")[: int(m.group(1))].tobytes()
-    title = re.search(rb'"title": "(.*?)"', data)
+    return np.packbits(bits, bitorder="little")[: int(m.group(1))].tobytes()
+
+
+def juce_encode(data):
+    bits = np.unpackbits(np.frombuffer(data, np.uint8), bitorder="little")
+    bits = np.concatenate([bits, np.zeros(-len(bits) % 6, np.uint8)]).reshape(-1, 6)
+    sixes = np.packbits(np.pad(bits, ((0, 0), (0, 2))), axis=1, bitorder="little").ravel()
+    return f"{len(data)}.".encode() + bytes(_JUCE_B64.encode()[i] for i in sixes)
+
+
+def nam_capture_name(state):
+    """The capture's title from a saved TONE3000 plugin state."""
+    data = juce_decode(state)
+    title = re.search(rb'"title": "(.*?)"', data) if data else None
     return " ".join(title.group(1).decode(errors="replace").split()) if title else None
+
+
+def gateway_state(default, nam_file):
+    """A state for the Mac Gateway plugin (classic NAM format) that loads nam_file.
+    Gateway can't read the Windows TONE3000 states: it stores the capture's path, not the capture itself.
+    Its state is length-prefixed strings (header, version, model path, IR path) then the knobs."""
+    comp = juce_decode(default)
+    i = 4 + int.from_bytes(comp[:4], "little")
+    i += 4 + int.from_bytes(comp[i:i + 4], "little")
+    path = str(Path(nam_file).resolve()).encode()
+    comp = comp[:i] + len(path).to_bytes(4, "little") + path + comp[i + 4:]  # replaces the empty model path
+    xml = _COMPONENT_RE.sub(lambda _: b"<IComponent>" + juce_encode(comp) + b"</IComponent>", default[8:])
+    return default[:4] + (len(xml) - 1).to_bytes(4, "little") + xml  # the length field leaves out the trailing NUL
+
+
+def find_capture(title):
+    """The .nam file in nam/captures whose name matches a capture title (spacing and case ignored)."""
+    norm = lambda s: " ".join(s.split()).lower()
+    return next((f for f in (NAM_DIR / "captures").rglob("*.nam") if norm(f.stem) == norm(title)), None)
 
 
 def load_nam(key):
@@ -368,9 +402,15 @@ def load_nam(key):
     if not (NAM_PLUGIN.exists() and state.exists()):
         return None, None
     raw = state.read_bytes()
+    capture = nam_capture_name(raw) or "NAM capture"
     plugin = load_plugin(str(NAM_PLUGIN))
+    if NAM_PLUGIN.name == "Gateway.vst3":
+        nam_file = find_capture(capture)
+        if nam_file is None:
+            return None, None
+        raw = gateway_state(plugin.raw_state, nam_file)
     plugin.raw_state = raw
-    return plugin, nam_capture_name(raw) or "NAM capture"
+    return plugin, capture
 
 
 def build(key):
