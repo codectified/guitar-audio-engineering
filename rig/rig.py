@@ -932,8 +932,8 @@ def main():
     print("Measuring noise floor - keep your hands OFF the strings for 2 seconds...")
     # The quietest windows are the real hiss/hum; a stray pluck or ringing string only lifts the loud ones.
     noise_db = np.percentile(record(2), 20, axis=1)
-    if args.input_channel:
-        channel = min(args.input_channel, n_in) - 1
+    if args.input_channel or n_in == 1:  # nothing to choose between on a one-input device (Spark GO)
+        channel = min(args.input_channel or 1, n_in) - 1
     else:
         input("Now press Enter and strum the guitar hard for 3 seconds (stay quiet otherwise)...")
         strum_db = record(3).max(axis=1)
