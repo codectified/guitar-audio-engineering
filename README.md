@@ -31,7 +31,7 @@ rig's window is focused.
 
 | Key | What it does |
 | --- | --- |
-| `1`–`9`, `d`, `0` | presets (`0` = clean) |
+| `1`–`9`, `d`, `o`, `0` | presets (`o` = octave fuzz, `0` = clean) |
 | `[` / `]` | input trim (more = more drive) |
 | `-` / `+` | master volume |
 | `m` | mute (hit this if it ever howls) |

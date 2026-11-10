@@ -58,6 +58,16 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - Levels with Gateway on a synthetic pluck: -24 dB (Hendrix) to -34 dB (Muddy) vs Clean -33.5; `NAM_TRIM_DB`
   was measured with the Windows plugin and a different test signal. Not retuned; check by ear.
 
+## Octave fuzz preset `o` (2026-11-10)
+
+- Built from a description, no audio clip: Ariel Posen's tone ("octave fuzz feeding most of it, then a plugin
+  adding that specific hair and squash"; Dave Navarro asked if it was a ring modulator).
+- `OctaveUp` (rig.py) full-wave rectifies a 120 Hz-2.5 kHz band (octave up, 75% mix) in front of the preset's
+  board, via `PRE_STAGES`/`Rig.pre` since pedalboard has no rectifier. Then fuzz, a hard-clipped top-end
+  "hair" blend, a 10:1 / 2 ms compressor ("squash"), and a lightly driven built-in Marshall-ish amp.
+- Verified offline: 330 Hz in -> 660 Hz out, level -27 dB on the synthetic pluck (mid-pack), ~1.5% CPU.
+  **Not heard yet.** If Omar sends a clip, match the EQ / octave amount / compression to it.
+
 ## Hardware facts (learned the hard way)
 
 - **Input 1 = microphone, input 2 = guitar.** Reading the mic caused a howling feedback loop.

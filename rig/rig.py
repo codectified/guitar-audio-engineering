@@ -29,7 +29,7 @@ else:
 
 import numpy as np
 import sounddevice as sd
-from pedalboard import (Chorus, Compressor, Convolution, Delay, Distortion, Gain, HighpassFilter,
+from pedalboard import (Chorus, Clipping, Compressor, Convolution, Delay, Distortion, Gain, HighpassFilter,
                         HighShelfFilter, LadderFilter, Limiter, LowpassFilter, LowShelfFilter, Mix,
                         NoiseGate, Pedalboard, PeakFilter, Phaser, Reverb, load_plugin)
 
@@ -284,6 +284,32 @@ def derek_trucks():
     return pedals, amp, 5000, fx
 
 
+def octave_fuzz():
+    # The octave-up itself is OctaveUp, which runs in front of these pedals (see PRE_STAGES)
+    pedals = [
+        NoiseGate(threshold_db=-60, ratio=4, release_ms=120),  # a fuzz this hot hisses between notes
+        # Fuzz: slammed hard, mids forward
+        Gain(gain_db=24), Distortion(drive_db=30), LowpassFilter(cutoff_frequency_hz=6000), Gain(gain_db=-20),
+        # "Hair": a second, harder clip on the top end only, for the raspy fizz riding on every note
+        Mix([
+            Gain(gain_db=0),
+            Pedalboard([HighpassFilter(cutoff_frequency_hz=1800), Gain(gain_db=18), Clipping(threshold_db=-12),
+                        Gain(gain_db=-14)]),
+        ]),
+        # "Squash": fast, heavy compression so every note comes out the same size and hangs there
+        Compressor(threshold_db=-32, ratio=10, attack_ms=2, release_ms=80),
+        Gain(gain_db=12),
+    ]
+    # Marshall-ish amp just past clean: the pedals do the dirt
+    amp = [
+        PeakFilter(cutoff_frequency_hz=800, gain_db=3, q=0.8),
+        Gain(gain_db=4), Distortion(drive_db=6),
+        *power_amp(presence_db=3),
+    ]
+    fx = [Reverb(room_size=0.2, damping=0.6, wet_level=0.08, dry_level=0.95, width=0.0)]
+    return pedals, amp, 5500, fx
+
+
 def clean():
     pedals = [
         NoiseGate(threshold_db=-65, ratio=3, release_ms=150),
@@ -312,6 +338,7 @@ PRESETS = {
     "8": ("Albert King", albert_king, -15.0),
     "9": ("Freddie King", freddie_king, -14.0),
     "d": ("Derek Trucks", derek_trucks, -15.0),
+    "o": ("Octave Fuzz", octave_fuzz, -20.0),
     "0": ("Clean", clean, 0.0),
 }
 
@@ -341,6 +368,8 @@ CHAIN_INFO = {
           "Finger picks", "Loud Fender (built-in sim)", "Reverb"),
     "d": ("SG + slide into a pushed Super Reverb: vocal, sustaining (try Open E: n)",
           "Fingers, SG > Comp", "Pushed Super Reverb (built-in sim)", "Tape echo > Big reverb"),
+    "o": ("Octave fuzz, nasty: octave up, fuzz, extra top-end hair, squashed flat (neck pickup, 12th fret up)",
+          "Octave up > Fuzz > Hair > Squash", "Marshall-ish (built-in sim)", "Small room"),
     "0": ("Fender clean",
           "Compressor", "Fender clean (built-in sim)", "Reverb"),
 }
@@ -657,6 +686,31 @@ class AutoWah:
         return (x * (1 - ramp) + wet * ramp).astype(np.float32)
 
 
+class OctaveUp:
+    """Octave-up for an octave fuzz (Octavia-style). Folding the bottom half of each cycle up (full-wave
+    rectifying) doubles the pitch, and on chords or low notes it clangs like a ring modulator.
+    Cleanest on single notes, neck pickup, above the 12th fret."""
+    MIX = 0.75  # octave vs. the straight guitar
+
+    def __init__(self):
+        # band-limit first: the fold turns bass into mud and treble into fizz
+        self.pre = Pedalboard([HighpassFilter(cutoff_frequency_hz=120), LowpassFilter(cutoff_frequency_hz=2500)])
+        self.post = Pedalboard([HighpassFilter(cutoff_frequency_hz=60)])  # folding adds DC: take it back out
+
+    def reset(self):
+        self.pre.reset()
+        self.post.reset()
+
+    def __call__(self, x):
+        band = self.pre(x, SR, reset=False)
+        octave = self.post(np.abs(band) * 2, SR, reset=False)  # x2 makes up the level the fold loses
+        return (x * (1 - self.MIX) + octave * self.MIX).astype(np.float32)
+
+
+# Python stages that run in front of a preset's board (pedalboard has no rectifier)
+PRE_STAGES = {"o": OctaveUp}
+
+
 class Rig:
     def __init__(self, input_channel=0):
         self.boards, self.chains, self.trims = {}, {}, {}
@@ -676,6 +730,7 @@ class Rig:
         self.input_hpf = Pedalboard([HighpassFilter(cutoff_frequency_hz=70), HighpassFilter(cutoff_frequency_hz=70)])
         self.limiter = Pedalboard([Limiter(threshold_db=-1.0, release_ms=50)])  # protects your ears
         self.wah = AutoWah()
+        self.pre = {k: stage() for k, stage in PRE_STAGES.items()}
         self.in_peak = 0.0
         self.out_peak = 0.0
         self.xruns = 0
@@ -694,9 +749,13 @@ class Rig:
         if key == self.current:
             return
         self.boards[key].reset()
+        if key in self.pre:
+            self.pre[key].reset()
         self.previous, self.current, self.fade_pos = self.current, key, 0
 
     def run_board(self, key, x):
+        if key in self.pre:
+            x = self.pre[key](x)
         y = self.boards[key](x, SR, reset=False)
         if y.shape[1] < x.shape[1]:
             # plugins with latency (NAM: 29 samples) return a short first block after a reset
