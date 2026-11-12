@@ -62,10 +62,15 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 
 - Built from a description, no audio clip: Ariel Posen's tone ("octave fuzz feeding most of it, then a plugin
   adding that specific hair and squash"; Dave Navarro asked if it was a ring modulator).
-- `OctaveUp` (rig.py) full-wave rectifies a 120 Hz-2.5 kHz band (octave up, 75% mix) in front of the preset's
-  board, via `PRE_STAGES`/`Rig.pre` since pedalboard has no rectifier. Then fuzz, a hard-clipped top-end
+- `Octaver` (rig.py) runs in front of the preset's board via `PRE_STAGES`/`Rig.pre` (pedalboard has no rectifier):
+  octave up = full-wave rectified 120 Hz-2.5 kHz band; octave down = Schmitt-trigger flip-flop on the low-passed
+  note, as a square shaped by a 30 ms envelope (multiplying the guitar by the flip-flop instead made the
+  1.5x-pitch sideband louder than the sub above the low strings). Mix: dry 0.3, up 0.5, down 0.9.
+  Omar (2026-11-12): v1 (up only) was "cool but the clip is way nastier... almost like a bass octave".
+  The reel (instagram.com/reel/DfkXTVzJGOn) needs an Instagram login to download. Then fuzz, a hard-clipped top-end
   "hair" blend, a 10:1 / 2 ms compressor ("squash"), and a lightly driven built-in Marshall-ish amp.
-- Verified offline: 330 Hz in -> 660 Hz out, level -27 dB on the synthetic pluck (mid-pack), ~1.5% CPU.
+- Verified offline: up 330 -> 660 Hz; down 82 -> 41 Hz ... 660 -> 330 Hz (sub strongest everywhere); level
+  -26 dB on the synthetic pluck (mid-pack), ~3% CPU.
   **Not heard yet.** If Omar sends a clip, match the EQ / octave amount / compression to it.
 
 ## Hardware facts (learned the hard way)

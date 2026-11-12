@@ -285,7 +285,7 @@ def derek_trucks():
 
 
 def octave_fuzz():
-    # The octave-up itself is OctaveUp, which runs in front of these pedals (see PRE_STAGES)
+    # The octaves themselves come from Octaver, which runs in front of these pedals (see PRE_STAGES)
     pedals = [
         NoiseGate(threshold_db=-60, ratio=4, release_ms=120),  # a fuzz this hot hisses between notes
         # Fuzz: slammed hard, mids forward
@@ -368,8 +368,8 @@ CHAIN_INFO = {
           "Finger picks", "Loud Fender (built-in sim)", "Reverb"),
     "d": ("SG + slide into a pushed Super Reverb: vocal, sustaining (try Open E: n)",
           "Fingers, SG > Comp", "Pushed Super Reverb (built-in sim)", "Tape echo > Big reverb"),
-    "o": ("Octave fuzz, nasty: octave up, fuzz, extra top-end hair, squashed flat (neck pickup, 12th fret up)",
-          "Octave up > Fuzz > Hair > Squash", "Marshall-ish (built-in sim)", "Small room"),
+    "o": ("Octave fuzz, nasty: octave up + bass octave down, fuzz, top-end hair, squashed flat (single notes)",
+          "Octave up+down > Fuzz > Hair > Squash", "Marshall-ish (built-in sim)", "Small room"),
     "0": ("Fender clean",
           "Compressor", "Fender clean (built-in sim)", "Reverb"),
 }
@@ -686,29 +686,50 @@ class AutoWah:
         return (x * (1 - ramp) + wet * ramp).astype(np.float32)
 
 
-class OctaveUp:
-    """Octave-up for an octave fuzz (Octavia-style). Folding the bottom half of each cycle up (full-wave
-    rectifying) doubles the pitch, and on chords or low notes it clangs like a ring modulator.
-    Cleanest on single notes, neck pickup, above the 12th fret."""
-    MIX = 0.75  # octave vs. the straight guitar
+class Octaver:
+    """Octave up + octave down for the octave fuzz, in front of the fuzz like the pedals.
+    Up (Octavia-style): folding the bottom half of each cycle up doubles the pitch; clangs like a ring mod on chords.
+    Down (analog octave-down / synth style): a flip-flop follows the note and toggles every other cycle, which is a
+    square wave exactly an octave below; shaped by how hard you play. Into a fuzz that's the growly synth-bass part.
+    Cleanest on single notes; chords and fast lines make the down octave glitch, which is part of the nastiness."""
+    DRY, UP, DOWN = 0.3, 0.5, 0.9
+    HYST = 0.002  # the tracker flips once the note crosses +/- this (about -54 dBFS), so hiss can't flip it
+    ENV_RELEASE_S = 0.03  # how fast the sub octave follows the note dying away
 
     def __init__(self):
-        # band-limit first: the fold turns bass into mud and treble into fizz
-        self.pre = Pedalboard([HighpassFilter(cutoff_frequency_hz=120), LowpassFilter(cutoff_frequency_hz=2500)])
-        self.post = Pedalboard([HighpassFilter(cutoff_frequency_hz=60)])  # folding adds DC: take it back out
+        # band-limit the fold: it turns bass into mud and treble into fizz
+        self.up_pre = Pedalboard([HighpassFilter(cutoff_frequency_hz=120), LowpassFilter(cutoff_frequency_hz=2500)])
+        self.up_post = Pedalboard([HighpassFilter(cutoff_frequency_hz=60)])  # folding adds DC: take it back out
+        # the tracker needs the fundamental only, or harmonics flip it twice a cycle
+        self.track = Pedalboard([LowpassFilter(cutoff_frequency_hz=500), LowpassFilter(cutoff_frequency_hz=500)])
+        self.down_post = Pedalboard([LowpassFilter(cutoff_frequency_hz=700), HighpassFilter(cutoff_frequency_hz=35)])
+        self.reset()
 
     def reset(self):
-        self.pre.reset()
-        self.post.reset()
+        for board in (self.up_pre, self.up_post, self.track, self.down_post):
+            board.reset()
+        self.flip, self.armed, self.env = 1.0, True, 0.0
 
     def __call__(self, x):
-        band = self.pre(x, SR, reset=False)
-        octave = self.post(np.abs(band) * 2, SR, reset=False)  # x2 makes up the level the fold loses
-        return (x * (1 - self.MIX) + octave * self.MIX).astype(np.float32)
+        up = self.up_post(np.abs(self.up_pre(x, SR, reset=False)) * 2, SR, reset=False)  # x2: the fold halves the level
+        tracked = self.track(x, SR, reset=False)[0]
+        sub = np.empty(len(tracked), np.float32)
+        flip, armed, env = self.flip, self.armed, self.env
+        decay = np.exp(-1 / (SR * self.ENV_RELEASE_S))
+        for i, v in enumerate(tracked):  # Schmitt trigger: flip on the way up, re-arm on the way down
+            if armed and v > self.HYST:
+                flip, armed = -flip, False
+            elif not armed and v < -self.HYST:
+                armed = True
+            env = max(abs(v), env * decay)
+            sub[i] = flip * env
+        self.flip, self.armed, self.env = flip, armed, env
+        down = self.down_post(sub[np.newaxis, :], SR, reset=False)
+        return (x * self.DRY + up * self.UP + down * self.DOWN).astype(np.float32)
 
 
 # Python stages that run in front of a preset's board (pedalboard has no rectifier)
-PRE_STAGES = {"o": OctaveUp}
+PRE_STAGES = {"o": Octaver}
 
 
 class Rig:
