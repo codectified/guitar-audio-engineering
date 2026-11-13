@@ -48,6 +48,7 @@ NAM_PLUGIN = (Path(r"C:\Program Files\Common Files\VST3\TONE3000.vst3\Contents\x
 SR = 48000  # replaced by the interface's native rate at startup
 # Exit code 11/12 = "restart me on input 1/2"; Guitar Rig.bat watches for it.
 RESTART_EXIT_BASE = 10
+DEVICE_LOST_EXIT = 13  # the launcher waits for the interface to come back, then restarts
 RESTART_FLAG = HERE / "restart.flag"  # create to make a running rig restart cleanly
 QUIT_FLAG = HERE / "quit.flag"        # create to make a running rig quit cleanly
 GATE_FLOOR_MAX_DB = -58  # noise gates never close above this (soft playing sits around -50 dBFS)
@@ -747,16 +748,27 @@ class Backing:
     BOOGIE = [0, 4, 7, 9, 10, 9, 7, 4]  # eighth notes over each bar: root 3 5 6 b7 6 5 3
     # Bass roots in the guitar's own low octave (E2 = low E string), so a small speaker can still play them
     KEYS = [("E", 82.41), ("A", 110.0), ("G", 98.0), ("C", 130.81), ("D", 146.83)]
+    # Song backings: drums, a bass line that follows the chords, and a soft organ pad so you hear the changes.
+    # bass = (step in the bar, semitones above the chord root, length in steps).
+    SONGS = [
+        {"name": "Comfortably Numb", "bpm": 63, "per_beat": 4,  # outro solo, B minor, Gilmour at ~63 BPM
+         "drums": {"kick": "X.......X.x.....", "snare": "....X.......X...", "hat": "x.o.x.o.x.o.x.o."},
+         "chords": [("Bm", 2), ("A", 2), ("G", 2), ("Em", 2)],
+         "bass": [(0, 0, 6), (6, 0, 2), (8, 7, 4), (12, 0, 4)]},
+    ]
+    NOTE = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 
     def __init__(self):
         self.style = None  # index into STYLES, None = drums off
+        self.song = None  # index into SONGS, None = no song (overrides style/bass/key while on)
+        self.chord = ""  # chord the song is on right now, for the status line
         self.bass = False
         self.key = 0
         self.bpm = 90
         self.level_db = -4.0  # relative to the master volume; starts a bit under a guitar preset
         self.pos = 0  # samples rendered so far
         self.next_step, self.step = 0.0, 0
-        self.tail = np.zeros(0, np.float32)  # audio already triggered, starting at self.pos
+        self.voices = []  # sounds still playing: [sound, gain, samples until it starts (negative = already played)]
         self.bass_cache = {}
         rng = np.random.default_rng(7)
         t = lambda sec: np.arange(int(sec * SR)) / SR
@@ -775,12 +787,21 @@ class Backing:
         }
         self.sounds = {k: v.astype(np.float32) for k, v in self.sounds.items()}
         self.bass_tone = Pedalboard([LowpassFilter(cutoff_frequency_hz=900)])
+        self.pad_tone = Pedalboard([LowpassFilter(cutoff_frequency_hz=2500)])
 
     @property
     def active(self):
-        return self.style is not None or self.bass
+        return self.style is not None or self.bass or self.song is not None
+
+    def groove(self):
+        """(steps per beat, {instrument: pattern}) currently playing."""
+        if self.song is not None:
+            return self.SONGS[self.song]["per_beat"], self.SONGS[self.song]["drums"]
+        return self.STYLES[self.style][1:] if self.style is not None else (4, {})
 
     def describe(self):
+        if self.song is not None:
+            return f"{self.SONGS[self.song]['name']}  {self.chord:<3} {self.bpm}bpm"
         parts = [self.STYLES[self.style][0]] if self.style is not None else []
         if self.bass:
             parts.append(f"bass {self.KEYS[self.key][0]}")
@@ -791,19 +812,54 @@ class Backing:
         self.step, self.next_step = 0, float(self.pos)
 
     def next_style(self):
+        if self.song is not None:  # leaving the song: start the drum styles from the top
+            self.song, self.style, self.bass = None, None, False
         self.style = 0 if self.style is None else (self.style + 1 if self.style + 1 < len(self.STYLES) else None)
         self.restart()
+
+    def next_song(self):
+        self.song = 0 if self.song is None else (self.song + 1 if self.song + 1 < len(self.SONGS) else None)
+        self.bass = self.song is not None  # songs come with their bass line; k still turns it off
+        if self.song is not None:
+            self.bpm = self.SONGS[self.song]["bpm"]
+            self.prepare()
+        self.restart()
+
+    @classmethod
+    def parse_chord(cls, name):
+        """'F#m' -> (pitch class, minor?)."""
+        pc = cls.NOTE[name[0]] + {"#": 1, "b": -1}.get(name[1:2], 0)
+        return pc % 12, name.rstrip("7").endswith("m")
+
+    @staticmethod
+    def hz(midi):
+        return 440.0 * 2 ** ((midi - 69) / 12)
+
+    def song_bars(self):
+        """One chord name per bar of the song's loop."""
+        return [c for c, bars in self.SONGS[self.song]["chords"] for _ in range(bars)]
+
+    def prepare(self):
+        """Render the song's pads and bass notes now (from the key handler), not inside the audio callback."""
+        if self.song is None:
+            return
+        per_beat = self.SONGS[self.song]["per_beat"]
+        step_len = SR * 60 / self.bpm / per_beat
+        for chord, bars in self.SONGS[self.song]["chords"]:
+            self.pad(chord, int(bars * 4 * per_beat * step_len))
+            pc, _ = self.parse_chord(chord)
+            for _, semis, length in self.SONGS[self.song]["bass"]:
+                self.bass_note(self.hz(40 + (pc - 4) % 12 + semis), int(length * step_len * 0.92))
 
     def toggle_bass(self):
         self.bass = not self.bass
         if self.style is None:
             self.restart()
 
-    def bass_note(self, semitones, samples):
+    def bass_note(self, freq, samples):
         """A plucked, round synth bass note (saw-ish, low-passed), cached."""
-        key = (self.key, semitones, samples)
+        key = (round(freq, 2), samples)
         if key not in self.bass_cache:
-            freq = self.KEYS[self.key][1] * 2 ** (semitones / 12)
             t = np.arange(samples) / SR
             saw = sum(np.sin(2 * np.pi * freq * h * t) / h for h in range(1, 9))
             env = np.minimum(t / 0.005, 1) * np.exp(-t / 0.35) * np.clip((samples - np.arange(samples)) / (0.01 * SR), 0, 1)
@@ -811,14 +867,29 @@ class Backing:
             self.bass_cache[key] = self.bass_tone(note[None, :], SR, reset=True)[0]
         return self.bass_cache[key]
 
+    def pad(self, chord, samples):
+        """A soft, slightly chorused organ chord held for the chord's whole length, cached."""
+        key = (chord, samples)
+        if key not in self.bass_cache:
+            pc, minor = self.parse_chord(chord)
+            root = 52 + (pc - 4) % 12  # E3..D#4: under the guitar's solo range, above the bass
+            t = np.arange(samples) / SR
+            out = np.zeros(samples)
+            for midi in (root, root + (3 if minor else 4), root + 7, root + 12):
+                f = self.hz(midi)
+                for detune in (0.998, 1.002):  # two slightly detuned voices beat gently, like a chorus
+                    out += sum(np.sin(2 * np.pi * f * detune * h * t) * a for h, a in ((1, 1.0), (2, 0.4), (3, 0.15)))
+            env = np.minimum(t / 0.4, 1) * np.clip((samples - np.arange(samples)) / (0.3 * SR), 0, 1)
+            note = (0.03 * out * env).astype(np.float32)
+            self.bass_cache[key] = self.pad_tone(note[None, :], SR, reset=True)[0]
+        return self.bass_cache[key]
+
     def add(self, sound, offset, gain):
-        need = offset + len(sound)
-        if len(self.tail) < need:
-            self.tail = np.concatenate((self.tail, np.zeros(need - len(self.tail), np.float32)))
-        self.tail[offset:need] += sound * gain
+        # mixed a block at a time in __call__: mixing a held chord all at once would blow the audio deadline
+        self.voices.append([sound, gain, offset])
 
     def trigger(self, offset, step_len):
-        per_beat, pattern = (self.STYLES[self.style][1:] if self.style is not None else (4, {}))
+        per_beat, pattern = self.groove()
         bar_steps = per_beat * 4
         in_bar, bar = self.step % bar_steps, self.step // bar_steps
         for inst, hits in pattern.items():
@@ -826,25 +897,50 @@ class Backing:
             if hit != ".":
                 sound = "click_accent" if inst == "click" and hit == "X" else inst
                 self.add(self.sounds[sound], offset, self.HIT[hit])
+        if self.song is not None:
+            bars = self.song_bars()
+            chord = bars[bar % len(bars)]
+            pc, _ = self.parse_chord(chord)
+            if in_bar == 0:
+                self.chord = chord
+                if bar % len(bars) == 0 or bars[bar % len(bars) - 1] != chord:  # first bar of this chord
+                    held = next(n for n in range(1, len(bars) + 1)
+                                if n == len(bars) or bars[(bar + n) % len(bars)] != chord)
+                    self.add(self.pad(chord, int(held * bar_steps * step_len)), offset, 1.0)
+            if self.bass:
+                for at, semis, length in self.SONGS[self.song]["bass"]:
+                    if at == in_bar:
+                        freq = self.hz(40 + (pc - 4) % 12 + semis)  # roots E2..D#3, the guitar's low octave
+                        self.add(self.bass_note(freq, int(length * step_len * 0.92)), offset, 1.0)
+            return
         in_beat = in_bar % per_beat
         if self.bass and in_beat in (0, 2):  # eighth notes; on the triplet grid the second one swings late
             eighth = (in_bar // per_beat) * 2 + (in_beat == 2)
             gap = 2 if in_beat == 0 else per_beat - 2  # steps until the next bass note
             semis = self.TWELVE_BAR[bar % 12] + self.BOOGIE[eighth]
-            self.add(self.bass_note(semis, int(gap * step_len * 0.92)), offset, 1.0)
+            freq = self.KEYS[self.key][1] * 2 ** (semis / 12)
+            self.add(self.bass_note(freq, int(gap * step_len * 0.92)), offset, 1.0)
 
     def __call__(self, frames):
         if self.active:
-            per_beat = self.STYLES[self.style][1] if self.style is not None else 4
+            per_beat = self.groove()[0]
             step_len = SR * 60 / self.bpm / per_beat
             while self.next_step < self.pos + frames:
                 self.trigger(max(0, int(self.next_step - self.pos)), step_len)
                 self.step += 1
                 self.next_step += step_len
         self.pos += frames
-        out = self.tail[:frames]
-        self.tail = self.tail[frames:]
-        return out if len(out) == frames else np.pad(out, (0, frames - len(out)))
+        out = np.zeros(frames, np.float32)
+        for v in self.voices:
+            sound, gain, start = v
+            src = max(0, -start)
+            dst = max(0, start)
+            n = min(frames - dst, len(sound) - src)
+            if n > 0:
+                out[dst:dst + n] += sound[src:src + n] * gain
+            v[2] -= frames
+        self.voices = [v for v in self.voices if -v[2] < len(v[0])]
+        return out
 
 
 class Rig:
@@ -871,6 +967,7 @@ class Rig:
         self.in_peak = 0.0
         self.out_peak = 0.0
         self.xruns = 0
+        self.last_callback = time.time()
 
     def set_gate_floor(self, noise_db):
         """Make every noise gate close above the measured hiss/hum, so silence stays silent."""
@@ -900,6 +997,7 @@ class Rig:
         return y * 10 ** (self.trims[key] / 20)
 
     def callback(self, indata, outdata, frames, time_info, status):
+        self.last_callback = time.time()
         if status:
             self.xruns += 1
         raw = indata[:, self.input_channel].astype(np.float32)
@@ -1019,6 +1117,7 @@ def menu(rig):
         "   k      bass line on/off: boogie line through a 12-bar blues (works with or without drums)",
         "   l      bass key: E / A / G / C / D",
         "   ; / '  backing volume -/+ 3 dB",
+        "   p      song backing: drums + bass + chords (Comfortably Numb outro solo, Bm 63 BPM) / off",
         section("OTHER"),
         "   h      show this menu again",
         "   x      restart (picks up new presets and code changes, keeps your input)",
@@ -1172,6 +1271,7 @@ def main():
         print(f"Driver: {driver} @ {SR} Hz, latency {(stream.latency[0] + stream.latency[1]) * 1000:.1f} ms round trip"
               + ("  (lower the buffer size in Focusrite Control to cut this)" if driver == "ASIO" else "") + "\n")
         announce(rig, rig.current)
+        rig.last_callback = time.time()  # the watchdog starts counting once the stream is running
         readings = []
         tuning = 0
         scale = None  # index into SCALES while the scale trainer is on
@@ -1191,6 +1291,10 @@ def main():
                     flag.unlink(missing_ok=True)
                     print(f"\n{'Restarting' if code else 'Quitting'} ({flag.name} found)...")
                     return code
+            if time.time() - rig.last_callback > 2:
+                # the interface went away (Spark GO switched off, Bluetooth grabbed it, cable pulled)
+                print("\nThe audio device stopped responding.")
+                return DEVICE_LOST_EXIT
             for k in pressed():
                 k = k.lower()
                 if k == "q":
@@ -1253,6 +1357,9 @@ def main():
                     rig.backing.next_style()
                 elif k in ",.":
                     rig.backing.bpm = int(np.clip(rig.backing.bpm + (5 if k == "." else -5), 40, 240))
+                    rig.backing.prepare()
+                elif k == "p":
+                    rig.backing.next_song()
                 elif k == "k":
                     rig.backing.toggle_bass()
                 elif k == "l":

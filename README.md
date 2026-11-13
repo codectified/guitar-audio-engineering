@@ -43,6 +43,7 @@ rig's window is focused.
 | `,` / `.` | tempo -/+ 5 BPM |
 | `k` / `l` | 12-bar blues bass line on/off / bass key (E A G C D) |
 | `;` / `'` | backing volume |
+| `p` | song backing: drums + bass + chords (Comfortably Numb outro solo, Bm, 63 BPM) / off |
 | `x` / `q` | restart / quit |
 
 ## Quick start (Mac)
@@ -54,6 +55,9 @@ macOS asks to let Terminal use the microphone: say yes, or the rig hears silence
 - **Scarlett Solo:** picked automatically, about 8 ms round trip.
 - **Positive Grid Spark GO:** also works (guitar in and sound out over its USB cable), but about 35 ms round trip,
   so the Scarlett is better for real playing. Put the Spark on a clean preset so you don't hear its amp on top.
+- **Auto-launch:** run `rig/install_watch.sh` once and the rig opens by itself whenever the Spark GO is switched
+  on (`rig/install_watch.sh --remove` undoes it). If the Spark drops out mid-session (switched off, Bluetooth
+  grabbed it), the rig window waits and restarts when it's back.
 - The rig runs at the interface's own sample rate on a Mac. If a Scarlett is set to 192 kHz in
   Audio MIDI Setup, that works but uses 4x the CPU; 48 kHz is plenty.
 - NAM amp captures need the free **Gateway** plugin (the Mac name for the TONE3000 plugin): the macOS installer

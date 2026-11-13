@@ -81,6 +81,23 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
   `k` bass, `l` bass key (E A G C D, roots in the E2 octave so the Spark's small speaker can play them), `;`/`'` level.
 - Verified offline: click onsets exactly 0.5 s apart at 120 BPM, bass bar 1 in E = E G# B C# D C# B G#,
   all styles render, ~0.1% CPU. Not heard yet.
+- Song backings (`p`, `Backing.SONGS`): per-song drums, chord loop, bass pattern (step, semitones over the
+  chord root, length) and a soft detuned organ pad held for each chord. First song: Comfortably Numb outro solo,
+  Bm(2) A(2) G(2) Em(2) at 63 BPM; the bar counts are a best guess, easy to change. Pads/bass notes are rendered in
+  `prepare()` from the key handler (song change, tempo change), never in the callback. Sounds are mixed a block
+  at a time from `voices` (mixing a whole 7 s pad in one go took 1.2 ms of a 1.45 ms block).
+- Verified offline: chord changes exactly every 7.62 s (2 bars at 63 BPM), bar 1 bass at 123 Hz (B2), worst block
+  0.1 ms. Not heard yet.
+
+## Mac auto-launch and device loss (2026-11-13)
+
+- rig.py exits with 13 when the audio callback stops for 2 s (Spark GO switched off, Bluetooth took it).
+  `Guitar Rig.command` then waits for a Spark/Scarlett to be listed again and restarts; other crashes with the
+  device missing do the same.
+- `rig/spark_watch.sh` (LaunchAgent `com.guitarrig.sparkwatch`, installed by `rig/install_watch.sh`) opens the
+  launcher when the Spark appears and no launcher is running. Only on the appear edge, so `q` doesn't relaunch.
+  Installing was blocked for Claude by auto mode (persistent login item): Omar runs it himself.
+- Not verified: whether the stream closes cleanly when the device vanishes (the old rig did exit).
 
 ## Hardware facts (learned the hard way)
 
