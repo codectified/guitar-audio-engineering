@@ -732,6 +732,121 @@ class Octaver:
 PRE_STAGES = {"o": Octaver}
 
 
+class Backing:
+    """Practice backing: a drum machine and a 12-bar blues bass line, synthesized (no sample files) and mixed
+    into the output. Patterns are steps per bar: X = accent, x = hit, o = ghost note."""
+    STYLES = [  # (name, steps per beat, {instrument: pattern})
+        ("click", 4, {"click": "X...x...x...x..."}),
+        ("rock", 4, {"kick": "X.......X.x.....", "snare": "....X.......X...", "hat": "x.o.x.o.x.o.x.o."}),
+        ("shuffle", 3, {"kick": "X.....x.....", "snare": "...X.....X..", "hat": "x.ox.ox.ox.o"}),  # triplet feel
+        ("funk", 4, {"kick": "X..x......X..x..", "snare": "....X..o.o..X..o", "hat": "xoxoxoxoxoxoxoxo"}),
+        ("half-time", 4, {"kick": "X.....x.........", "snare": "........X.......", "hat": "x.x.x.x.x.x.x.x."}),
+    ]
+    HIT = {"X": 1.0, "x": 0.6, "o": 0.3}
+    TWELVE_BAR = [0, 0, 0, 0, 5, 5, 0, 0, 7, 5, 0, 7]  # I I I I IV IV I I V IV I V(turnaround), in semitones
+    BOOGIE = [0, 4, 7, 9, 10, 9, 7, 4]  # eighth notes over each bar: root 3 5 6 b7 6 5 3
+    # Bass roots in the guitar's own low octave (E2 = low E string), so a small speaker can still play them
+    KEYS = [("E", 82.41), ("A", 110.0), ("G", 98.0), ("C", 130.81), ("D", 146.83)]
+
+    def __init__(self):
+        self.style = None  # index into STYLES, None = drums off
+        self.bass = False
+        self.key = 0
+        self.bpm = 90
+        self.level_db = -4.0  # relative to the master volume; starts a bit under a guitar preset
+        self.pos = 0  # samples rendered so far
+        self.next_step, self.step = 0.0, 0
+        self.tail = np.zeros(0, np.float32)  # audio already triggered, starting at self.pos
+        self.bass_cache = {}
+        rng = np.random.default_rng(7)
+        t = lambda sec: np.arange(int(sec * SR)) / SR
+        decay = lambda sec, tau: np.exp(-t(sec) / tau)
+        sweep = 50 + 100 * np.exp(-t(0.35) / 0.04)  # kick: pitch drops from 150 to 50 Hz
+        noise = lambda sec: rng.standard_normal(int(sec * SR)).astype(np.float32)
+        snare_noise = Pedalboard([HighpassFilter(cutoff_frequency_hz=1000), LowpassFilter(cutoff_frequency_hz=8000)])
+        self.sounds = {
+            "kick": 0.9 * np.sin(2 * np.pi * np.cumsum(sweep) / SR) * decay(0.35, 0.12),
+            "snare": 0.5 * snare_noise(noise(0.25)[None, :], SR)[0] * decay(0.25, 0.08)
+                     + 0.35 * np.sin(2 * np.pi * 185 * t(0.25)) * decay(0.25, 0.05),
+            "hat": 0.22 * Pedalboard([HighpassFilter(cutoff_frequency_hz=7000)])(noise(0.08)[None, :], SR)[0]
+                   * decay(0.08, 0.018),
+            "click": 0.5 * np.sin(2 * np.pi * 1000 * t(0.05)) * decay(0.05, 0.012),
+            "click_accent": 0.6 * np.sin(2 * np.pi * 1600 * t(0.05)) * decay(0.05, 0.012),
+        }
+        self.sounds = {k: v.astype(np.float32) for k, v in self.sounds.items()}
+        self.bass_tone = Pedalboard([LowpassFilter(cutoff_frequency_hz=900)])
+
+    @property
+    def active(self):
+        return self.style is not None or self.bass
+
+    def describe(self):
+        parts = [self.STYLES[self.style][0]] if self.style is not None else []
+        if self.bass:
+            parts.append(f"bass {self.KEYS[self.key][0]}")
+        return f"{' + '.join(parts)} {self.bpm}bpm" if parts else ""
+
+    def restart(self):
+        """Start the pattern from beat 1 at the next block."""
+        self.step, self.next_step = 0, float(self.pos)
+
+    def next_style(self):
+        self.style = 0 if self.style is None else (self.style + 1 if self.style + 1 < len(self.STYLES) else None)
+        self.restart()
+
+    def toggle_bass(self):
+        self.bass = not self.bass
+        if self.style is None:
+            self.restart()
+
+    def bass_note(self, semitones, samples):
+        """A plucked, round synth bass note (saw-ish, low-passed), cached."""
+        key = (self.key, semitones, samples)
+        if key not in self.bass_cache:
+            freq = self.KEYS[self.key][1] * 2 ** (semitones / 12)
+            t = np.arange(samples) / SR
+            saw = sum(np.sin(2 * np.pi * freq * h * t) / h for h in range(1, 9))
+            env = np.minimum(t / 0.005, 1) * np.exp(-t / 0.35) * np.clip((samples - np.arange(samples)) / (0.01 * SR), 0, 1)
+            note = (0.35 * saw * env).astype(np.float32)
+            self.bass_cache[key] = self.bass_tone(note[None, :], SR, reset=True)[0]
+        return self.bass_cache[key]
+
+    def add(self, sound, offset, gain):
+        need = offset + len(sound)
+        if len(self.tail) < need:
+            self.tail = np.concatenate((self.tail, np.zeros(need - len(self.tail), np.float32)))
+        self.tail[offset:need] += sound * gain
+
+    def trigger(self, offset, step_len):
+        per_beat, pattern = (self.STYLES[self.style][1:] if self.style is not None else (4, {}))
+        bar_steps = per_beat * 4
+        in_bar, bar = self.step % bar_steps, self.step // bar_steps
+        for inst, hits in pattern.items():
+            hit = hits[in_bar]
+            if hit != ".":
+                sound = "click_accent" if inst == "click" and hit == "X" else inst
+                self.add(self.sounds[sound], offset, self.HIT[hit])
+        in_beat = in_bar % per_beat
+        if self.bass and in_beat in (0, 2):  # eighth notes; on the triplet grid the second one swings late
+            eighth = (in_bar // per_beat) * 2 + (in_beat == 2)
+            gap = 2 if in_beat == 0 else per_beat - 2  # steps until the next bass note
+            semis = self.TWELVE_BAR[bar % 12] + self.BOOGIE[eighth]
+            self.add(self.bass_note(semis, int(gap * step_len * 0.92)), offset, 1.0)
+
+    def __call__(self, frames):
+        if self.active:
+            per_beat = self.STYLES[self.style][1] if self.style is not None else 4
+            step_len = SR * 60 / self.bpm / per_beat
+            while self.next_step < self.pos + frames:
+                self.trigger(max(0, int(self.next_step - self.pos)), step_len)
+                self.step += 1
+                self.next_step += step_len
+        self.pos += frames
+        out = self.tail[:frames]
+        self.tail = self.tail[frames:]
+        return out if len(out) == frames else np.pad(out, (0, frames - len(out)))
+
+
 class Rig:
     def __init__(self, input_channel=0):
         self.boards, self.chains, self.trims = {}, {}, {}
@@ -752,6 +867,7 @@ class Rig:
         self.limiter = Pedalboard([Limiter(threshold_db=-1.0, release_ms=50)])  # protects your ears
         self.wah = AutoWah()
         self.pre = {k: stage() for k, stage in PRE_STAGES.items()}
+        self.backing = Backing()
         self.in_peak = 0.0
         self.out_peak = 0.0
         self.xruns = 0
@@ -802,7 +918,10 @@ class Rig:
             y = old * (1 - ramp) + y * ramp
             self.fade_pos += frames
 
-        y = self.limiter(y * 10 ** (self.master_db / 20), SR, reset=False)[0]
+        y = y * 10 ** (self.master_db / 20)
+        drums = self.backing(frames)  # runs even when off, so ringing hits finish instead of cutting out
+        y = y + drums * 10 ** ((self.master_db + self.backing.level_db) / 20)
+        y = self.limiter(y, SR, reset=False)[0]
         self.out_peak = max(self.out_peak * 0.9, float(np.abs(y).max()))
 
         outdata[:] = 0 if (self.muted or self.tuner) else y[:, np.newaxis]
@@ -894,6 +1013,12 @@ def menu(rig):
         "   s      next scale (maqams, ragas, Japanese, gamelan...): prints a fretboard map, then shows",
         "          live which scale note you're on and whether your quarter-tone bends land",
         "   r      next root note",
+        section("PRACTICE BACKING"),
+        "   b      drums: click / rock / blues shuffle / funk / half-time / off",
+        "   , / .  tempo -/+ 5 BPM",
+        "   k      bass line on/off: boogie line through a 12-bar blues (works with or without drums)",
+        "   l      bass key: E / A / G / C / D",
+        "   ; / '  backing volume -/+ 3 dB",
         section("OTHER"),
         "   h      show this menu again",
         "   x      restart (picks up new presets and code changes, keeps your input)",
@@ -1124,6 +1249,16 @@ def main():
                     rig.wah.next_sensitivity()
                     if not rig.wah.on:  # changing the sensitivity means you want to hear it
                         rig.wah.toggle()
+                elif k == "b":
+                    rig.backing.next_style()
+                elif k in ",.":
+                    rig.backing.bpm = int(np.clip(rig.backing.bpm + (5 if k == "." else -5), 40, 240))
+                elif k == "k":
+                    rig.backing.toggle_bass()
+                elif k == "l":
+                    rig.backing.key = (rig.backing.key + 1) % len(Backing.KEYS)
+                elif k in ";'":
+                    rig.backing.level_db = float(np.clip(rig.backing.level_db + (3 if k == "'" else -3), -30, 12))
             if rig.tuner or rig.listen:
                 freq = detect_pitch(rig.tuner_buf.astype(np.float64), SR)
                 readings = (readings + [freq])[-5:] if freq else []
@@ -1134,7 +1269,8 @@ def main():
                 status = f"\r[{PRESETS[rig.current][0]}] " + scale_display(heard, SCALES[scale], root)
             else:
                 flag = "MUTED" if rig.muted else (f"wah:{rig.wah.sensitivity}" if rig.wah.on else "")
-                status = (f"\r[{PRESETS[rig.current][0]:<12}] in{rig.input_channel + 1} {meter(rig.in_peak)} "
+                beat = f"♪ {rig.backing.describe()}  " if rig.backing.active else ""
+                status = (f"\r[{PRESETS[rig.current][0]:<12}] {beat}in{rig.input_channel + 1} {meter(rig.in_peak)} "
                           f"out {meter(rig.out_peak)} trim {rig.input_trim_db:+.0f}dB vol {rig.master_db:+.0f}dB "
                           f"glitches {rig.xruns} {flag:<8}")
             # never let the status line wrap, or "\r" can't get back to its start and it scrolls instead

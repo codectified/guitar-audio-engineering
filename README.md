@@ -39,6 +39,10 @@ rig's window is focused.
 | `t` | tuner on/off. **The tuner mutes the output**: no sound? press `t` |
 | `n` | next tuning (turns the tuner on) |
 | `s` / `r` | scale trainer: next scale / next root |
+| `b` | practice drums: click / rock / blues shuffle / funk / half-time / off |
+| `,` / `.` | tempo -/+ 5 BPM |
+| `k` / `l` | 12-bar blues bass line on/off / bass key (E A G C D) |
+| `;` / `'` | backing volume |
 | `x` / `q` | restart / quit |
 
 ## Quick start (Mac)

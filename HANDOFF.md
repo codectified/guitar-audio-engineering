@@ -73,6 +73,15 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
   -26 dB on the synthetic pluck (mid-pack), ~3% CPU.
   **Not heard yet.** If Omar sends a clip, match the EQ / octave amount / compression to it.
 
+## Practice backing (2026-11-12)
+
+- `Backing` (rig.py): synthesized drum machine (kick / snare / hat / click, no sample files) and a boogie bass line
+  through a 12-bar blues, mixed in before the limiter at master volume + `level_db` (-4 dB default).
+  Keys: `b` style (click, rock, shuffle on a triplet grid, funk, half-time, off), `,`/`.` tempo (40-240, start 90),
+  `k` bass, `l` bass key (E A G C D, roots in the E2 octave so the Spark's small speaker can play them), `;`/`'` level.
+- Verified offline: click onsets exactly 0.5 s apart at 120 BPM, bass bar 1 in E = E G# B C# D C# B G#,
+  all styles render, ~0.1% CPU. Not heard yet.
+
 ## Hardware facts (learned the hard way)
 
 - **Input 1 = microphone, input 2 = guitar.** Reading the mic caused a howling feedback loop.
