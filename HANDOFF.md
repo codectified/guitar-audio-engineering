@@ -97,6 +97,7 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - `rig/spark_watch.sh` (LaunchAgent `com.guitarrig.sparkwatch`, installed by `rig/install_watch.sh`) opens the
   launcher when the Spark appears and no launcher is running. Only on the appear edge, so `q` doesn't relaunch.
   Installing was blocked for Claude by auto mode (persistent login item): Omar runs it himself.
+  Installed on this Mac 2026-11-13 (RunAtLoad, so it survives reboots). Not yet seen it open the rig live.
 - Not verified: whether the stream closes cleanly when the device vanishes (the old rig did exit).
 
 ## Hardware facts (learned the hard way)
