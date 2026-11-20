@@ -48,6 +48,7 @@ NAM_PLUGIN = (Path(r"C:\Program Files\Common Files\VST3\TONE3000.vst3\Contents\x
 SR = 48000  # replaced by the interface's native rate at startup
 # Exit code 11/12 = "restart me on input 1/2"; Guitar Rig.bat watches for it.
 RESTART_EXIT_BASE = 10
+LOG_FILE = HERE / "rig.log"  # audio events (dropouts, device loss, crashes), for working out what went wrong
 DEVICE_LOST_EXIT = 13  # the launcher waits for the interface to come back, then restarts
 RESTART_FLAG = HERE / "restart.flag"  # create to make a running rig restart cleanly
 QUIT_FLAG = HERE / "quit.flag"        # create to make a running rig quit cleanly
@@ -64,6 +65,29 @@ def cab(cutoff=5000):
         PeakFilter(cutoff_frequency_hz=2500, gain_db=3, q=1.2),
         LadderFilter(mode=LadderFilter.Mode.LPF24, cutoff_hz=cutoff, resonance=0.15, drive=1.0),
     ]
+
+
+def rat(gain_db=32, filter_hz=3000, level_db=-24):
+    """ProCo RAT. The op-amp stage gains the highs more than the bass (its feedback legs corner at ~60 Hz and
+    ~1.5 kHz) and the LM308 can't keep up with high gain, so the top rolls off; then silicon diodes clip to
+    ground hard, and the Filter knob is a plain low-pass (CCW = bright, CW = dark: ~3 kHz is about 11 o'clock)."""
+    return [
+        HighpassFilter(cutoff_frequency_hz=60),
+        HighShelfFilter(cutoff_frequency_hz=1500, gain_db=8),
+        Gain(gain_db=gain_db), LowpassFilter(cutoff_frequency_hz=6000),  # gain knob, op-amp running out of speed
+        Distortion(drive_db=6), Clipping(threshold_db=-4),  # diodes: hard, a bit of square-wave rasp
+        LowpassFilter(cutoff_frequency_hz=filter_hz),  # Filter knob
+        Gain(gain_db=level_db),  # Volume
+    ]
+
+
+def log(msg):
+    """Append a timestamped line to rig.log. Main thread only: file I/O in the audio callback causes dropouts."""
+    try:
+        with open(LOG_FILE, "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {msg}\n")
+    except OSError:
+        pass
 
 
 def power_amp(presence_db=2):
@@ -311,6 +335,24 @@ def octave_fuzz():
     return pedals, amp, 5500, fx
 
 
+def pillows():
+    # The Pillows: Fenders into a RAT, bright and buzzy power-pop crunch rather than metal
+    pedals = [
+        NoiseGate(threshold_db=-60, ratio=4, release_ms=120),
+        HighShelfFilter(cutoff_frequency_hz=3000, gain_db=3),  # Tele/Jazzmaster bridge pickup snap
+        *rat(gain_db=30, filter_hz=3200, level_db=-16),
+    ]
+    # Loud, clean Fender: the RAT does the dirt, the amp adds punch and a little bloom
+    amp = [
+        PeakFilter(cutoff_frequency_hz=120, gain_db=2, q=0.8),
+        PeakFilter(cutoff_frequency_hz=700, gain_db=2, q=0.8),
+        Gain(gain_db=4), Distortion(drive_db=3),
+        *power_amp(presence_db=3),
+    ]
+    fx = [Reverb(room_size=0.2, damping=0.6, wet_level=0.08, dry_level=0.95, width=0.0)]
+    return pedals, amp, 6000, fx
+
+
 def clean():
     pedals = [
         NoiseGate(threshold_db=-65, ratio=3, release_ms=150),
@@ -340,12 +382,16 @@ PRESETS = {
     "9": ("Freddie King", freddie_king, -14.0),
     "d": ("Derek Trucks", derek_trucks, -15.0),
     "o": ("Octave Fuzz", octave_fuzz, -20.0),
+    "f": ("The Pillows", pillows, -16.5),
     "0": ("Clean", clean, 0.0),
 }
 
 # The TONE3000 plugin normalizes its own output, so a NAM amp needs a much smaller trim than the
 # built-in amp it replaces. Measured against the built-in presets with a synthetic strummed Strat.
-NAM_TRIM_DB = {"1": 0.0, "2": -1.5, "3": -1.5, "4": 1.5, "5": 5.0, "6": 2.5, "7": 2.5, "8": -2.0, "9": 1.5, "d": 3.5}
+# Captures for presets that have no .state yet (made on the PC with --setup-nam). Only the Mac's Gateway plugin
+# can load these directly; on Windows run --setup-nam with the same capture to get the amp.
+NAM_CAPTURES = {"f": "1964 Fender Super Reverb - Norm Bright, V4 T4 B4.5"}
+NAM_TRIM_DB = {"1": 0.0, "2": -1.5, "3": -1.5, "4": 1.5, "5": 5.0, "6": 2.5, "7": 2.5, "8": -2.0, "9": 1.5, "d": 3.5, "f": -3.5}
 
 # What's in each preset, for the menu: (one-line vibe, pedals, built-in amp, effects)
 CHAIN_INFO = {
@@ -371,6 +417,8 @@ CHAIN_INFO = {
           "Fingers, SG > Comp", "Pushed Super Reverb (built-in sim)", "Tape echo > Big reverb"),
     "o": ("Octave fuzz, nasty: octave up + bass octave down, fuzz, top-end hair, squashed flat (single notes)",
           "Octave up+down > Fuzz > Hair > Squash", "Marshall-ish (built-in sim)", "Small room"),
+    "f": ("The Pillows: Fender into a ProCo RAT, bright buzzy crunch (Funny Bunny)",
+          "Bright pickup > RAT", "Clean Fender, loud (built-in sim)", "Small room"),
     "0": ("Fender clean",
           "Compressor", "Fender clean (built-in sim)", "Reverb"),
 }
@@ -429,10 +477,15 @@ def find_capture(title):
 def load_nam(key):
     """The NAM plugin with the capture saved by --setup-nam and the capture's name, or (None, None)."""
     state = NAM_DIR / f"{key}.state"
-    if not (NAM_PLUGIN.exists() and state.exists()):
+    if not NAM_PLUGIN.exists():
         return None, None
-    raw = state.read_bytes()
-    capture = nam_capture_name(raw) or "NAM capture"
+    if state.exists():
+        raw = state.read_bytes()
+        capture = nam_capture_name(raw) or "NAM capture"
+    elif key in NAM_CAPTURES and NAM_PLUGIN.name == "Gateway.vst3":
+        raw, capture = None, NAM_CAPTURES[key]  # Gateway can be pointed at a capture file directly
+    else:
+        return None, None
     plugin = load_plugin(str(NAM_PLUGIN))
     if NAM_PLUGIN.name == "Gateway.vst3":
         nam_file = find_capture(capture)
@@ -962,12 +1015,15 @@ class Rig:
         self.input_hpf = Pedalboard([HighpassFilter(cutoff_frequency_hz=70), HighpassFilter(cutoff_frequency_hz=70)])
         self.limiter = Pedalboard([Limiter(threshold_db=-1.0, release_ms=50)])  # protects your ears
         self.wah = AutoWah()
+        self.rat = Pedalboard(rat())  # g: a RAT on the floor in front of any preset
+        self.rat_on = False
         self.pre = {k: stage() for k, stage in PRE_STAGES.items()}
         self.backing = Backing()
         self.in_peak = 0.0
         self.out_peak = 0.0
         self.xruns = 0
         self.last_callback = time.time()
+        self.last_status = ""
 
     def set_gate_floor(self, noise_db):
         """Make every noise gate close above the measured hiss/hum, so silence stays silent."""
@@ -1000,6 +1056,7 @@ class Rig:
         self.last_callback = time.time()
         if status:
             self.xruns += 1
+            self.last_status = str(status)  # logged from the main loop
         raw = indata[:, self.input_channel].astype(np.float32)
         if self.tuner or self.listen:
             self.tuner_buf = np.concatenate((self.tuner_buf[frames:], raw))
@@ -1007,6 +1064,8 @@ class Rig:
         x = self.input_hpf(x[np.newaxis, :], SR, reset=False)
         self.in_peak = max(self.in_peak * 0.9, float(np.abs(x).max()))
         x = self.wah(x)
+        if self.rat_on:
+            x = self.rat(x, SR, reset=False)
 
         y = self.run_board(self.current, x)
         fade_len = int(0.03 * SR)  # 30 ms crossfade when switching presets
@@ -1102,6 +1161,7 @@ def menu(rig):
         "   m      mute / unmute  (hit this if it ever starts howling)",
         "   i      swap input channel (auto-detected at startup by strumming)",
         "   w      auto-wah on/off: an envelope filter in front of the amp (pick harder = more quack)",
+        "   g      ProCo RAT distortion on/off, in front of any preset (f has one built in)",
         "   e      auto-wah sensitivity: low / med / high (try high for soft or clean playing)",
         section("TUNER"),
         "   t      tuner on/off (mutes the output while tuning)",
@@ -1267,6 +1327,9 @@ def main():
                        dtype="float32", latency=latency, callback=rig.callback)
 
     print(menu(rig))
+    log(f"start: {sd.query_devices(in_dev)['name']} -> {sd.query_devices(out_dev)['name']}, {driver} @ {SR} Hz, "
+        f"block {blocksize}, input {channel + 1}")
+    logged_xruns = 0
     with stream, keypresses() as pressed:
         print(f"Driver: {driver} @ {SR} Hz, latency {(stream.latency[0] + stream.latency[1]) * 1000:.1f} ms round trip"
               + ("  (lower the buffer size in Focusrite Control to cut this)" if driver == "ASIO" else "") + "\n")
@@ -1291,9 +1354,14 @@ def main():
                     flag.unlink(missing_ok=True)
                     print(f"\n{'Restarting' if code else 'Quitting'} ({flag.name} found)...")
                     return code
+            if rig.xruns != logged_xruns:
+                log(f"glitch x{rig.xruns - logged_xruns}: {rig.last_status.strip()}")
+                logged_xruns = rig.xruns
             if time.time() - rig.last_callback > 2:
                 # the interface went away (Spark GO switched off, Bluetooth grabbed it, cable pulled)
                 print("\nThe audio device stopped responding.")
+                log(f"audio callback stopped for 2 s (stream active={stream.active}); devices now: "
+                    + "; ".join(d["name"] for d in sd.query_devices()))
                 return DEVICE_LOST_EXIT
             for k in pressed():
                 k = k.lower()
@@ -1349,6 +1417,9 @@ def main():
                     rig.input_channel = 1 - rig.input_channel
                 elif k == "w":
                     rig.wah.toggle()
+                elif k == "g":
+                    rig.rat_on = not rig.rat_on
+                    rig.rat.reset()
                 elif k == "e":
                     rig.wah.next_sensitivity()
                     if not rig.wah.on:  # changing the sensitivity means you want to hear it
@@ -1375,7 +1446,8 @@ def main():
             elif scale is not None:
                 status = f"\r[{PRESETS[rig.current][0]}] " + scale_display(heard, SCALES[scale], root)
             else:
-                flag = "MUTED" if rig.muted else (f"wah:{rig.wah.sensitivity}" if rig.wah.on else "")
+                pedals = " ".join(f for f, on in ((f"wah:{rig.wah.sensitivity}", rig.wah.on), ("RAT", rig.rat_on)) if on)
+                flag = "MUTED" if rig.muted else pedals
                 beat = f"♪ {rig.backing.describe()}  " if rig.backing.active else ""
                 status = (f"\r[{PRESETS[rig.current][0]:<12}] {beat}in{rig.input_channel + 1} {meter(rig.in_peak)} "
                           f"out {meter(rig.out_peak)} trim {rig.input_trim_db:+.0f}dB vol {rig.master_db:+.0f}dB "
@@ -1388,4 +1460,14 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        code = main()
+    except SystemExit as e:
+        log(f"exit: {e.code}")
+        raise
+    except BaseException:
+        import traceback
+        log("crash:\n" + traceback.format_exc())
+        raise
+    log(f"exit: {code}")
+    sys.exit(code)

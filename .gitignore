@@ -9,3 +9,5 @@ rig/restart.flag
 rig/quit.flag
 # Mac virtualenv (made by Guitar Rig.command)
 .venv/
+# audio event log written by the rig
+rig/rig.log

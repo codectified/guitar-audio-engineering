@@ -89,6 +89,26 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - Verified offline: chord changes exactly every 7.62 s (2 bars at 63 BPM), bar 1 bass at 123 Hz (B2), worst block
   0.1 ms. Not heard yet.
 
+## The Pillows preset and RAT pedal (2026-11-20)
+
+- `rat()`: ProCo RAT model (HPF 60, +8 dB shelf at 1.5 kHz, gain, LPF 6k for the LM308, tanh + hard clip,
+  Filter LPF, volume). `g` puts one in front of any preset (`Rig.rat`, after the wah); `f` = The Pillows:
+  bright pickup > RAT (filter 3.2 kHz) > loud clean Fender. Gear is the user's friend's tip (Fender + RAT);
+  couldn't confirm it online.
+- New `NAM_CAPTURES`: a preset with no `.state` can name a capture title, which the Mac's Gateway loads directly.
+  `f` uses Super Reverb "Norm Bright, V4 T4 B4.5". On Windows it falls back to the built-in amp until
+  `--setup-nam f` is run there with that capture.
+- Levels matched offline to SRV (-17.8 dB RMS on a plucked test signal): f -17.7 (NAM) / -17.6 (built-in).
+  RAT on top of a preset is ~4 dB louder. Not heard yet.
+
+## Bluetooth crash (open, 2026-11-20)
+
+- Omar: playing phone music to the Spark GO over Bluetooth crashes the rig (it works when the Spark is
+  standalone). Cause unknown: no crash output survived. rig.py now logs to `rig/rig.log` (gitignored): start
+  config, every glitch with PortAudio's status, device loss with the device list, crashes with traceback, exit
+  codes. Next: reproduce once and read the log.
+- Workaround: play music from the Mac with output set to the Spark GO. Core Audio mixes it with the rig.
+
 ## Mac auto-launch and device loss (2026-11-13)
 
 - rig.py exits with 13 when the audio callback stops for 2 s (Spark GO switched off, Bluetooth took it).

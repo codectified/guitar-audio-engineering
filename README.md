@@ -36,6 +36,7 @@ rig's window is focused.
 | `-` / `+` | master volume |
 | `m` | mute (hit this if it ever howls) |
 | `w` / `e` | auto-wah on/off / sensitivity |
+| `g` | ProCo RAT distortion on/off, in front of any preset |
 | `t` | tuner on/off. **The tuner mutes the output**: no sound? press `t` |
 | `n` | next tuning (turns the tuner on) |
 | `s` / `r` | scale trainer: next scale / next root |

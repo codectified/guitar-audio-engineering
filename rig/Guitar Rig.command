@@ -12,6 +12,7 @@ ARGS=("$@")
 while true; do
     "$VENV/bin/python" rig.py "${ARGS[@]}"
     code=$?
+    echo "$(date '+%Y-%m-%d %H:%M:%S')  launcher: rig.py exited with $code" >> rig.log
     # rig.py exits with 11/12 when you press x: restart on input 1/2 without the strum check
     if [ $code -eq 11 ]; then ARGS=("$@" --input-channel 1)
     elif [ $code -eq 12 ]; then ARGS=("$@" --input-channel 2)
