@@ -54,6 +54,7 @@ run sets up a Python environment in `.venv/` (needs Python 3.11+, e.g. `brew ins
 macOS asks to let Terminal use the microphone: say yes, or the rig hears silence.
 
 - **Scarlett Solo:** picked automatically, about 8 ms round trip.
+- **Steinberg UR22mkII:** also picked automatically, about 7 ms. Guitar into input 2 with Hi-Z on, MIX knob on DAW.
 - **Positive Grid Spark GO:** also works (guitar in and sound out over its USB cable). The launcher joins its
   separate input and output into one device, "Spark GO (rig)" (`rig/spark_aggregate.swift`, needs the Xcode
   command line tools), which gets about 8 ms round trip like the Scarlett instead of 35 ms. Put the Spark on a clean preset so you don't hear its amp on top.

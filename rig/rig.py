@@ -1102,7 +1102,7 @@ def pick_devices(name):
         # "Spark GO (rig)" is the Spark's input + output joined into one device (spark_aggregate.swift, made by
         # the launcher): ~8 ms round trip vs ~35 ms with the two separate devices
         spark = ["Spark"] if (HERE / "no_aggregate").exists() else ["Spark GO (rig)", "Spark"]  # opt-out file
-        for part in [name] + (["Scarlett"] + spark if name == "Focusrite" else []):
+        for part in [name] + (["Scarlett", "UR22"] + spark if name == "Focusrite" else []):
             dev_in, dev_out = find_device(part, "input", "Core Audio"), find_device(part, "output", "Core Audio")
             if dev_in is not None and dev_out is not None:
                 return dev_in, dev_out, "Core Audio", BLOCK
@@ -1328,8 +1328,10 @@ def main():
     latency = "low"
     if driver == "Core Audio" and in_dev == out_dev:
         latency = 0.003  # Core Audio's "low" is ~20 ms; asking for 3 ms gets ~8 ms round trip on a Scarlett
-        if "Spark" in sd.query_devices(in_dev)["name"]:
-            blocksize = 0  # Spark GO aggregate at 44.1 kHz: Core Audio's own block size gives 8.3 ms, no glitches
+        if SR <= 96000:
+            # Core Audio's own block size: UR22mkII 7.4 ms, Spark GO aggregate 8.3 ms, no glitches; a fixed 128
+            # samples is fine on a 192 kHz Scarlett but 15 ms at 44.1 kHz
+            blocksize = 0
     elif driver == "Core Audio":
         blocksize = 64  # split in/out devices (Spark GO): smaller buffers drop out, this is ~35 ms and stable
     stream = sd.Stream(samplerate=SR, blocksize=blocksize, device=(in_dev, out_dev), channels=(n_in, 2),
