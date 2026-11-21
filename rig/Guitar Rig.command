@@ -7,9 +7,18 @@ if [ ! -x "$VENV/bin/python" ]; then
     python3 -m venv "$VENV" && "$VENV/bin/pip" install -q -r ../requirements.txt || { read -p "Setup failed. Press Enter to close."; exit 1; }
 fi
 device_here() { "$VENV/bin/python" -c 'import sounddevice as sd, sys
-sys.exit(not any(n in d["name"] for d in sd.query_devices() for n in ("Spark", "Scarlett")))' 2>/dev/null; }
+sys.exit(not any(n in d["name"] for d in sd.query_devices() for n in ("Spark GO USB", "Scarlett")))' 2>/dev/null; }
+spark_aggregate() {
+    # Join the Spark GO's separate in/out devices into one (8 ms instead of 35 ms). Rebuilt each start because
+    # its device IDs can change when it's replugged. Compiled once; needs the Xcode command line tools.
+    "$VENV/bin/python" -c 'import sounddevice as sd, sys
+sys.exit(not any("Spark GO USB" in d["name"] for d in sd.query_devices()))' 2>/dev/null || return
+    [ spark_aggregate -nt spark_aggregate.swift ] || swiftc -O spark_aggregate.swift -o spark_aggregate 2>/dev/null
+    [ -x spark_aggregate ] && ./spark_aggregate >/dev/null && sleep 1
+}
 ARGS=("$@")
 while true; do
+    spark_aggregate
     "$VENV/bin/python" rig.py "${ARGS[@]}"
     code=$?
     echo "$(date '+%Y-%m-%d %H:%M:%S')  launcher: rig.py exited with $code" >> rig.log
@@ -18,9 +27,10 @@ while true; do
     elif [ $code -eq 12 ]; then ARGS=("$@" --input-channel 2)
     elif [ $code -eq 13 ] || { [ $code -ne 0 ] && ! device_here; }; then
         # 13 = the interface went away mid-session (Spark switched off, Bluetooth took it): wait, then carry on
-        echo "Waiting for the Spark GO / Scarlett to come back (switch it on; close this window to give up)..."
+        device_here || echo "Waiting for the Spark GO / Scarlett to come back (switch it on; close this window to give up)..."
         until device_here; do sleep 3; done
-        sleep 3  # give Core Audio a moment to finish setting it up
+        echo "Retrying in 5 s (if Bluetooth music is playing on the Spark, the rig comes back when it stops)..."
+        sleep 5  # gives Core Audio a moment, and keeps retries slow while the Spark's USB audio is stalled
     else break; fi
 done
 read -p "Press Enter to close."

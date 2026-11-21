@@ -11,3 +11,5 @@ rig/quit.flag
 .venv/
 # audio event log written by the rig
 rig/rig.log
+# compiled from rig/spark_aggregate.swift by the launcher
+rig/spark_aggregate

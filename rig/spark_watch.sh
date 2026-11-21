@@ -3,7 +3,7 @@
 # Runs in the background from ~/Library/LaunchAgents/com.guitarrig.sparkwatch.plist (see install_watch.sh).
 cd "$(dirname "$0")"
 PY=../.venv/bin/python
-here() { "$PY" -c 'import sounddevice as sd, sys; sys.exit(not any("Spark" in d["name"] for d in sd.query_devices()))' 2>/dev/null; }
+here() { "$PY" -c 'import sounddevice as sd, sys; sys.exit(not any("Spark GO USB" in d["name"] for d in sd.query_devices()))' 2>/dev/null; }
 was_here=false
 while true; do
     if pgrep -f "Guitar Rig.command" >/dev/null; then

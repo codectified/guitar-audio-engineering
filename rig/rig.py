@@ -1099,7 +1099,9 @@ def pick_devices(name):
     On a Mac it's Core Audio, where the interface shows up as e.g. "Scarlett Solo USB". Some USB amps
     (Spark GO) show up as a separate input device and output device with the same name."""
     if sys.platform == "darwin":
-        for part in [name] + (["Scarlett", "Spark"] if name == "Focusrite" else []):
+        # "Spark GO (rig)" is the Spark's input + output joined into one device (spark_aggregate.swift, made by
+        # the launcher): ~8 ms round trip vs ~35 ms with the two separate devices
+        for part in [name] + (["Scarlett", "Spark GO (rig)", "Spark"] if name == "Focusrite" else []):
             dev_in, dev_out = find_device(part, "input", "Core Audio"), find_device(part, "output", "Core Audio")
             if dev_in is not None and dev_out is not None:
                 return dev_in, dev_out, "Core Audio", BLOCK
@@ -1283,8 +1285,12 @@ def main():
         while sd.get_stream().active:  # sd.wait() hangs forever if the interface has dropped off USB
             if time.time() > deadline:
                 sd.stop()
-                sys.exit("No audio is coming from the interface. Unplug the Focusrite's USB cable, wait 10 s, "
-                         "plug it back in, then start the rig again.")
+                # Seen on the Spark GO while Bluetooth music plays: still listed, but no USB audio. The launcher
+                # retries on this code until the audio comes back.
+                print("No audio is coming from the interface (Bluetooth music on the Spark GO stops its USB audio; "
+                      "a Scarlett may need unplugging for 10 s).")
+                log("no audio from the interface during the noise-floor check")
+                sys.exit(DEVICE_LOST_EXIT)
             sd.sleep(50)
         sd.stop()  # closes the recording stream (sd.wait() used to); ASIO allows only one open stream
         hpf =Pedalboard([HighpassFilter(cutoff_frequency_hz=70), HighpassFilter(cutoff_frequency_hz=70)])
@@ -1321,6 +1327,8 @@ def main():
     latency = "low"
     if driver == "Core Audio" and in_dev == out_dev:
         latency = 0.003  # Core Audio's "low" is ~20 ms; asking for 3 ms gets ~8 ms round trip on a Scarlett
+        if "Spark" in sd.query_devices(in_dev)["name"]:
+            blocksize = 0  # Spark GO aggregate at 44.1 kHz: Core Audio's own block size gives 8.3 ms, no glitches
     elif driver == "Core Audio":
         blocksize = 64  # split in/out devices (Spark GO): smaller buffers drop out, this is ~35 ms and stable
     stream = sd.Stream(samplerate=SR, blocksize=blocksize, device=(in_dev, out_dev), channels=(n_in, 2),

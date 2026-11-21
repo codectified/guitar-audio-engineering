@@ -101,12 +101,26 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - Levels matched offline to SRV (-17.8 dB RMS on a plucked test signal): f -17.7 (NAM) / -17.6 (built-in).
   RAT on top of a preset is ~4 dB louder. Not heard yet.
 
+## Spark GO latency: aggregate device (2026-11-20)
+
+- The Spark GO shows up as two Core Audio devices with separate clocks: 34.6 ms round trip and ~90 glitches/min
+  (input underflow/overflow) at block 64. `rig/spark_aggregate.swift` joins them into one public aggregate
+  device "Spark GO (rig)" (UID com.guitarrig.sparkgo.aggregate, clock from the output side, drift
+  compensation on the input). The launcher compiles it once (`rig/spark_aggregate`, gitignored) and rebuilds the
+  device on each start, because the Spark's sub-device UIDs may change on replug. `--remove` deletes it.
+- Measured 20 s each with the SRV NAM preset running: aggregate + Core Audio's block size + 3 ms = 8.3 ms,
+  0 glitches; block 32 = 9.2; block 64 = 11.4; split block 32 = 20.8 ms with 52 glitches. rig.py prefers the
+  aggregate and uses blocksize 0 on it. Spark presence checks match "Spark GO USB" (not the aggregate's name).
+
 ## Bluetooth crash (open, 2026-11-20)
 
 - Omar: playing phone music to the Spark GO over Bluetooth crashes the rig (it works when the Spark is
   standalone). Cause unknown: no crash output survived. rig.py now logs to `rig/rig.log` (gitignored): start
   config, every glitch with PortAudio's status, device loss with the device list, crashes with traceback, exit
-  codes. Next: reproduce once and read the log.
+  codes. The first log (20:31 to 21:02) had three losses with the Spark still listed and its callback stopped,
+  then a silent noise-floor check: the Spark stops USB audio while Bluetooth plays. The silent check now exits
+  13 too and the launcher retries every ~5 s until the audio comes back. Not yet known: whether the aggregate
+  rides through Bluetooth, and whether USB audio returns while the music is still playing.
 - Workaround: play music from the Mac with output set to the Spark GO. Core Audio mixes it with the rig.
 
 ## Mac auto-launch and device loss (2026-11-13)

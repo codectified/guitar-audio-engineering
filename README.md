@@ -54,8 +54,9 @@ run sets up a Python environment in `.venv/` (needs Python 3.11+, e.g. `brew ins
 macOS asks to let Terminal use the microphone: say yes, or the rig hears silence.
 
 - **Scarlett Solo:** picked automatically, about 8 ms round trip.
-- **Positive Grid Spark GO:** also works (guitar in and sound out over its USB cable), but about 35 ms round trip,
-  so the Scarlett is better for real playing. Put the Spark on a clean preset so you don't hear its amp on top.
+- **Positive Grid Spark GO:** also works (guitar in and sound out over its USB cable). The launcher joins its
+  separate input and output into one device, "Spark GO (rig)" (`rig/spark_aggregate.swift`, needs the Xcode
+  command line tools), which gets about 8 ms round trip like the Scarlett instead of 35 ms. Put the Spark on a clean preset so you don't hear its amp on top.
 - **Auto-launch:** run `rig/install_watch.sh` once and the rig opens by itself whenever the Spark GO is switched
   on (`rig/install_watch.sh --remove` undoes it). If the Spark drops out mid-session (switched off, Bluetooth
   grabbed it), the rig window waits and restarts when it's back.
