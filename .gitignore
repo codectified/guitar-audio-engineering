@@ -13,3 +13,5 @@ rig/quit.flag
 rig/rig.log
 # compiled from rig/spark_aggregate.swift by the launcher
 rig/spark_aggregate
+# create to stop using the Spark GO aggregate device (back to separate in/out)
+rig/no_aggregate

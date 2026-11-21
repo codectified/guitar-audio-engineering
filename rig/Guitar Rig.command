@@ -9,6 +9,7 @@ fi
 device_here() { "$VENV/bin/python" -c 'import sounddevice as sd, sys
 sys.exit(not any(n in d["name"] for d in sd.query_devices() for n in ("Spark GO USB", "Scarlett")))' 2>/dev/null; }
 spark_aggregate() {
+    [ -e no_aggregate ] && { [ -x spark_aggregate ] && ./spark_aggregate --remove >/dev/null; return; }  # opt-out
     # Join the Spark GO's separate in/out devices into one (8 ms instead of 35 ms). Rebuilt each start because
     # its device IDs can change when it's replugged. Compiled once; needs the Xcode command line tools.
     "$VENV/bin/python" -c 'import sounddevice as sd, sys

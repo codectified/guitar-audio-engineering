@@ -1101,7 +1101,8 @@ def pick_devices(name):
     if sys.platform == "darwin":
         # "Spark GO (rig)" is the Spark's input + output joined into one device (spark_aggregate.swift, made by
         # the launcher): ~8 ms round trip vs ~35 ms with the two separate devices
-        for part in [name] + (["Scarlett", "Spark GO (rig)", "Spark"] if name == "Focusrite" else []):
+        spark = ["Spark"] if (HERE / "no_aggregate").exists() else ["Spark GO (rig)", "Spark"]  # opt-out file
+        for part in [name] + (["Scarlett"] + spark if name == "Focusrite" else []):
             dev_in, dev_out = find_device(part, "input", "Core Audio"), find_device(part, "output", "Core Audio")
             if dev_in is not None and dev_out is not None:
                 return dev_in, dev_out, "Core Audio", BLOCK
