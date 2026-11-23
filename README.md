@@ -45,6 +45,8 @@ rig's window is focused.
 | `k` / `l` | 12-bar blues bass line on/off / bass key (E A G C D) |
 | `;` / `'` | backing volume |
 | `p` | song backing: drums + bass + chords (Comfortably Numb outro solo, Bm, 63 BPM) / off |
+| space | looper: record → play → overdub → play … (first loop sets the length; snaps to whole bars when the drums are on; a USB footswitch that types space/Enter works) |
+| `a` / `z` / `c` | looper: stop/play from the top / undo last overdub / clear |
 | `x` / `q` | restart / quit |
 
 ## Quick start (Mac)

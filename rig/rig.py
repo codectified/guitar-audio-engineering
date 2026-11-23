@@ -10,6 +10,7 @@ Real amp captures (optional):
                                 .nam capture onto a chain block, close the window, and preset 1 uses it
 """
 import argparse
+import collections
 import contextlib
 import os
 import re
@@ -996,6 +997,188 @@ class Backing:
         return out
 
 
+class Looper:
+    """Live looper, after the presets: it records the guitar exactly as you hear it (not the drums), so you
+    can loop a clean rhythm and solo over it with fuzz.
+
+    One button (space, or a footswitch that types space/Enter): record -> play -> overdub -> play -> ...
+    The first loop sets the length. With the drums on, it snaps to whole bars that start on beat 1, so the
+    loop stays locked to the drums. Everything recorded is shifted back by the round-trip latency: you play
+    along to what you hear, which comes out of the speaker ~9 ms late, so without this every overdub would
+    land late. Each overdub is a separate layer, so undo takes off the last one.
+
+    Timing is in samples since the stream started (the same clock as Backing.pos). "Music time" is when a
+    sample was sent to the speaker; what the input delivers at callback time t was played at music time
+    t - latency."""
+    MAX_S = 60  # longest loop
+    FADE_S = 0.01  # start/stop fades, so it doesn't click
+    LATE_PRESS = 1 / 8  # a press up to an eighth of a bar after beat 1 still counts as on beat 1
+
+    def __init__(self):
+        self.history = np.zeros(int((self.MAX_S + 10) * SR), np.float32)  # the guitar, always, newest last
+        self.latency = 0  # round trip in samples; set once the stream is open
+        self.commands = collections.deque()  # from the key thread; run at the start of the next audio block
+        self.level_db = 0.0
+        self.clear()
+
+    def clear(self):
+        self.state = "empty"  # empty / recording / playing / overdub / stopped
+        # The audio callback never allocates or copies whole loops (60 s of copying in a 0.7 ms block would
+        # crackle): maintain(), on the main thread, does that and swaps the results in
+        self.mix = None  # base loop + all overdubs; None for a moment after recording (played from history)
+        self.spare = None  # an empty layer, ready for the next overdub
+        self.layers = []  # each overdub on its own, for undo
+        self.layer = None  # the overdub being recorded
+        self.undo_layer = None  # a layer for maintain() to take off the mix
+        self.m0 = self.m1 = None  # music time the loop starts at, and (while recording) ends at
+        self.length = 0
+        self.od_on = self.od_off = None  # callback times an overdub starts / stops writing
+        self.gain = 0.0
+        self.stop_after_record = False
+        self.loop_now = 0
+
+    def press(self, cmd):
+        self.commands.append(cmd)
+
+    def maintain(self):
+        """Main thread, every few ms: the slow parts, done off the audio thread."""
+        if self.mix is None and self.length and self.state != "recording":
+            h, start = len(self.history), (self.m0 + self.latency) % len(self.history)
+            first = self.history[start:start + self.length]
+            self.mix = np.concatenate((first, self.history[:self.length - len(first)]))
+        if self.undo_layer is not None and self.mix is not None:
+            self.mix, self.undo_layer = self.mix - self.undo_layer, None
+        if self.mix is not None and self.spare is None:
+            self.spare = np.zeros_like(self.mix)
+
+    @staticmethod
+    def bar_grid(backing):
+        """(time of the next beat 1, bar length) in samples, or None when the drums are off."""
+        if not backing.active:
+            return None
+        per_beat = backing.groove()[0]
+        step_len = SR * 60 / backing.bpm / per_beat
+        bar_steps = per_beat * 4
+        ahead = (-backing.step) % bar_steps
+        return backing.next_step + ahead * step_len, bar_steps * step_len
+
+    def quantize_start(self, now, backing):
+        grid = self.bar_grid(backing)
+        if grid is None:
+            return now
+        nxt, bar = grid
+        prev = nxt - bar
+        return int(prev if now - prev < bar * self.LATE_PRESS else nxt)
+
+    def quantize_end(self, now, backing):
+        grid = self.bar_grid(backing)
+        if grid is None:
+            return max(now, self.m0 + int(0.25 * SR))
+        bar = grid[1]
+        return self.m0 + int(round(max(1, round((now - self.m0) / bar)) * bar))
+
+    def run(self, cmd, now, backing):
+        """Returns False to try again next block (waiting on maintain())."""
+        s = self.state
+        if cmd == "loop":
+            if s == "empty":
+                self.m0, self.m1, self.state = self.quantize_start(now, backing), None, "recording"
+            elif s == "recording":
+                self.m1 = self.quantize_end(now, backing)
+            elif s == "playing":
+                if self.spare is None or self.undo_layer is not None or self.layer is not None:
+                    return False
+                self.layer, self.spare = self.spare, None
+                self.state, self.od_on, self.od_off = "overdub", now + self.latency, None
+            elif s == "overdub":
+                self.od_off = now + self.latency
+                self.state = "playing"
+            elif s == "stopped":
+                self.m0, self.state = self.quantize_start(now, backing), "playing"
+        elif cmd == "stop":
+            if s == "recording":
+                self.m1 = self.quantize_end(now, backing)
+                self.stop_after_record = True
+            elif s in ("playing", "overdub"):
+                if s == "overdub":
+                    self.od_off = now + self.latency
+                self.state = "stopped"
+            elif s == "stopped":
+                return self.run("loop", now, backing)
+        elif cmd == "undo":
+            if self.undo_layer is not None:
+                return False
+            if self.layer is not None:  # the overdub in progress (or still finishing) goes
+                self.undo_layer, self.layer, self.od_on, self.od_off = self.layer, None, None, None
+                if s == "overdub":
+                    self.state = "playing"
+            elif self.layers:
+                self.undo_layer = self.layers.pop()
+            elif s == "recording":
+                self.clear()
+        elif cmd == "clear":
+            self.clear()
+        return True
+
+    def __call__(self, y, now, backing):
+        """y: the guitar this block, shape (frames,). Returns what the loop plays this block."""
+        frames, h = len(y), len(self.history)
+        self.loop_now = now
+        self.history[(now + np.arange(frames)) % h] = y
+        while self.commands:
+            if not self.run(self.commands[0], now, backing):
+                break
+            self.commands.popleft()
+
+        if self.state == "recording":
+            if self.m1 is None and now - self.m0 >= self.MAX_S * SR:
+                self.m1 = self.quantize_end(now, backing)
+            if self.m1 is None or now + frames < self.m1 + self.latency:
+                return np.zeros(frames, np.float32)
+            # the loop's last sample has arrived; maintain() cuts it out of the history, until then play it there
+            self.length = self.m1 - self.m0
+            self.state = "stopped" if self.stop_after_record else "playing"
+            self.stop_after_record = False
+        if not self.length:
+            return np.zeros(frames, np.float32)
+        n, mix = self.length, self.mix
+        t = now + np.arange(frames)
+
+        # overdub: input at callback time t was played at music time t - latency
+        if self.layer is not None and self.od_on is not None and mix is not None:
+            write = t >= self.od_on
+            if self.od_off is not None:
+                write &= t < self.od_off
+            if write.any():
+                pos = (t[write] - self.latency - self.m0) % n
+                self.layer[pos] += y[write]
+                mix[pos] += y[write]
+            if self.od_off is not None and now + frames >= self.od_off:
+                self.layers.append(self.layer)
+                self.layer, self.od_on, self.od_off = None, None, None
+
+        target = 1.0 if self.state in ("playing", "overdub") else 0.0
+        step = frames / (self.FADE_S * SR) * (1 if target else -1)
+        ramp = np.clip(self.gain + np.arange(1, frames + 1) / frames * step, 0, 1)
+        self.gain = float(ramp[-1])
+        if self.gain == 0 and target == 0:
+            return np.zeros(frames, np.float32)
+        pos = (t - self.m0) % n
+        sound = mix[pos] if mix is not None else self.history[(self.m0 + self.latency + pos) % h]
+        out = np.where(t >= self.m0, sound, 0) * ramp * 10 ** (self.level_db / 20)  # a restart waits for beat 1
+        return out.astype(np.float32)
+
+    def describe(self):
+        if self.state == "empty":
+            return ""
+        if self.state == "recording":
+            secs = 0 if self.m0 is None else max(0, self.loop_now - self.m0) / SR
+            return f"● REC {secs:.1f}s" + (" (closing on the bar)" if self.m1 else "")
+        n = self.length / SR
+        word = {"playing": "▶ LOOP", "overdub": "● DUB", "stopped": "■ LOOP"}[self.state]
+        return f"{word} {n:.1f}s +{len(self.layers) + (self.layer is not None)}"
+
+
 class Rig:
     def __init__(self, input_channel=0):
         self.boards, self.chains, self.trims = {}, {}, {}
@@ -1019,6 +1202,7 @@ class Rig:
         self.rat_on = False
         self.pre = {k: stage() for k, stage in PRE_STAGES.items()}
         self.backing = Backing()
+        self.looper = Looper()
         self.in_peak = 0.0
         self.out_peak = 0.0
         self.xruns = 0
@@ -1094,6 +1278,7 @@ class Rig:
             y = old * (1 - ramp) + y * ramp
             self.fade_pos += frames
 
+        y = y + self.looper(y[0], self.backing.pos, self.backing)  # before the backing moves its clock on
         y = y * 10 ** (self.master_db / 20)
         drums = self.backing(frames)  # runs even when off, so ringing hits finish instead of cutting out
         y = y + drums * 10 ** ((self.master_db + self.backing.level_db) / 20)
@@ -1200,6 +1385,12 @@ def menu(rig):
         "   l      bass key: E / A / G / C / D",
         "   ; / '  backing volume -/+ 3 dB",
         "   p      song backing: drums + bass + chords (Comfortably Numb outro solo, Bm 63 BPM) / off",
+        section("LOOPER"),
+        "   space  record -> play -> overdub -> play ... (the first loop sets the length; with drums on it",
+        "          snaps to whole bars from beat 1). A USB footswitch that types space or Enter works too",
+        "   a      stop / play again from the top",
+        "   z      undo the last overdub",
+        "   c      clear the loop",
         section("OTHER"),
         "   h      show this menu again",
         "   x      restart (picks up new presets and code changes, keeps your input)",
@@ -1366,6 +1557,7 @@ def main():
         print(f"Driver: {driver} @ {SR} Hz, latency {(stream.latency[0] + stream.latency[1]) * 1000:.1f} ms round trip"
               + ("  (lower the buffer size in Focusrite Control to cut this)" if driver == "ASIO" else "") + "\n")
         announce(rig, rig.current)
+        rig.looper.latency = int(round((stream.latency[0] + stream.latency[1]) * SR))
         rig.last_callback = time.time()  # the watchdog starts counting once the stream is running
         readings = []
         tuning = 0
@@ -1475,8 +1667,17 @@ def main():
                     rig.backing.toggle_bass()
                 elif k == "l":
                     rig.backing.key = (rig.backing.key + 1) % len(Backing.KEYS)
+                elif k in " \n\r":
+                    rig.looper.press("loop")
+                elif k == "a":
+                    rig.looper.press("stop")
+                elif k == "z":
+                    rig.looper.press("undo")
+                elif k == "c":
+                    rig.looper.press("clear")
                 elif k in ";'":
                     rig.backing.level_db = float(np.clip(rig.backing.level_db + (3 if k == "'" else -3), -30, 12))
+            rig.looper.maintain()
             if rig.tuner or rig.listen:
                 freq = detect_pitch(rig.tuner_buf.astype(np.float64), SR)
                 readings = (readings + [freq])[-5:] if freq else []
@@ -1489,6 +1690,8 @@ def main():
                 pedals = " ".join(f for f, on in ((f"wah:{rig.wah.sensitivity}", rig.wah.on), ("RAT", rig.rat_on)) if on)
                 flag = "MUTED" if rig.muted else pedals
                 beat = f"♪ {rig.backing.describe()}  " if rig.backing.active else ""
+                if rig.looper.state != "empty":
+                    beat += rig.looper.describe() + "  "
                 status = (f"\r[{PRESETS[rig.current][0]:<12}] {beat}in{rig.input_channel + 1} {meter(rig.in_peak)} "
                           f"out {meter(rig.out_peak)} trim {rig.input_trim_db:+.0f}dB vol {rig.master_db:+.0f}dB "
                           f"glitches {rig.xruns + rig.gaps} {flag:<8}")
