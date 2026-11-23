@@ -1022,6 +1022,12 @@ class Rig:
         self.in_peak = 0.0
         self.out_peak = 0.0
         self.xruns = 0
+        # Core Audio doesn't always flag a late callback as a glitch, so also watch its clock: when the output
+        # time jumps by more than the block we wrote, a block was dropped (heard as a crackle)
+        self.gaps = 0
+        self.last_dac = None
+        self.frames_seen = set()
+        self.worst_ms = 0.0
         self.last_callback = time.time()
         self.last_status = ""
 
@@ -1053,10 +1059,23 @@ class Rig:
         return y * 10 ** (self.trims[key] / 20)
 
     def callback(self, indata, outdata, frames, time_info, status):
+        started = time.perf_counter()
         self.last_callback = time.time()
         if status:
             self.xruns += 1
             self.last_status = str(status)  # logged from the main loop
+        dac = getattr(time_info, "outputBufferDacTime", 0) or 0
+        if dac and self.last_dac and dac - self.last_dac > 1.5 * frames / SR:
+            self.gaps += 1
+        self.last_dac = dac
+        if len(self.frames_seen) < 8:
+            self.frames_seen.add(frames)
+        try:
+            self._process(indata, outdata, frames)
+        finally:
+            self.worst_ms = max(self.worst_ms, (time.perf_counter() - started) * 1000)
+
+    def _process(self, indata, outdata, frames):
         raw = indata[:, self.input_channel].astype(np.float32)
         if self.tuner or self.listen:
             self.tuner_buf = np.concatenate((self.tuner_buf[frames:], raw))
@@ -1329,9 +1348,10 @@ def main():
     if driver == "Core Audio" and in_dev == out_dev:
         latency = 0.003  # Core Audio's "low" is ~20 ms; asking for 3 ms gets ~8 ms round trip on a Scarlett
         if SR <= 96000:
-            # Core Audio's own block size: UR22mkII 7.4 ms, Spark GO aggregate 8.3 ms, no glitches; a fixed 128
-            # samples is fine on a 192 kHz Scarlett but 15 ms at 44.1 kHz
-            blocksize = 0
+            # Not 0 (Core Audio's choice): with this latency it picks 18-sample blocks, 0.4 ms to run the whole
+            # chain in, and drops ~1.6 blocks a second (crackle that PortAudio never flags). 64 = 1.45 ms at 44.1k,
+            # about 2x the slowest callback. A fixed 128 is fine on a 192 kHz Scarlett but 15 ms at 44.1 kHz.
+            blocksize = 32 if SR <= 48000 else 128
     elif driver == "Core Audio":
         blocksize = 64  # split in/out devices (Spark GO): smaller buffers drop out, this is ~35 ms and stable
     stream = sd.Stream(samplerate=SR, blocksize=blocksize, device=(in_dev, out_dev), channels=(n_in, 2),
@@ -1340,7 +1360,8 @@ def main():
     print(menu(rig))
     log(f"start: {sd.query_devices(in_dev)['name']} -> {sd.query_devices(out_dev)['name']}, {driver} @ {SR} Hz, "
         f"block {blocksize}, input {channel + 1}")
-    logged_xruns = 0
+    logged_xruns = logged_gaps = 0
+    stats_at = time.time()
     with stream, keypresses() as pressed:
         print(f"Driver: {driver} @ {SR} Hz, latency {(stream.latency[0] + stream.latency[1]) * 1000:.1f} ms round trip"
               + ("  (lower the buffer size in Focusrite Control to cut this)" if driver == "ASIO" else "") + "\n")
@@ -1368,6 +1389,14 @@ def main():
             if rig.xruns != logged_xruns:
                 log(f"glitch x{rig.xruns - logged_xruns}: {rig.last_status.strip()}")
                 logged_xruns = rig.xruns
+            if rig.gaps != logged_gaps:
+                log(f"dropout x{rig.gaps - logged_gaps} (output clock skipped); blocks {sorted(rig.frames_seen)}, "
+                    f"slowest callback {rig.worst_ms:.2f} ms")
+                logged_gaps = rig.gaps
+            if time.time() - stats_at > 60:
+                log(f"stats: blocks {sorted(rig.frames_seen)}, slowest callback {rig.worst_ms:.2f} ms, "
+                    f"dropouts {rig.gaps}, glitches {rig.xruns}")
+                stats_at, rig.worst_ms = time.time(), 0.0
             if time.time() - rig.last_callback > 2:
                 # the interface went away (Spark GO switched off, Bluetooth grabbed it, cable pulled)
                 print("\nThe audio device stopped responding.")
@@ -1462,7 +1491,7 @@ def main():
                 beat = f"♪ {rig.backing.describe()}  " if rig.backing.active else ""
                 status = (f"\r[{PRESETS[rig.current][0]:<12}] {beat}in{rig.input_channel + 1} {meter(rig.in_peak)} "
                           f"out {meter(rig.out_peak)} trim {rig.input_trim_db:+.0f}dB vol {rig.master_db:+.0f}dB "
-                          f"glitches {rig.xruns} {flag:<8}")
+                          f"glitches {rig.xruns + rig.gaps} {flag:<8}")
             # never let the status line wrap, or "\r" can't get back to its start and it scrolls instead
             width = shutil.get_terminal_size().columns - 1
             sys.stdout.write(status[:width + 1] + "\x1b[K")

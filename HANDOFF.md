@@ -101,6 +101,17 @@ Signal path: Squier Strat → Focusrite (ASIO, 48 kHz) → presets → Focusrite
 - Levels matched offline to SRV (-17.8 dB RMS on a plucked test signal): f -17.7 (NAM) / -17.6 (built-in).
   RAT on top of a preset is ~4 dB louder. Not heard yet.
 
+## Spark GO wedged: USB audio dead both ways (2026-11-20/21)
+
+- After Bluetooth stalls on 2026-11-20 (first at 21:02), the Spark GO still enumerated on USB but sent digital
+  silence and ignored playback; the Spark app couldn't connect. Ruled out: rig code (old commit too), the
+  aggregate (created 22:08, after the input was already dead), macOS mute/volume, coreaudiod restart, Mac
+  reboot. Spark force restart (USB out, hold Power/Pair >10 s, hold again until blue) didn't fix it.
+  **Factory reset fixed it** (off; hold Power/Pair + Preset until white; hold Power/Pair until the four preset
+  LEDs blink once; it powers off; turn on). Note: exact zeros on the input are also normal with no guitar plugged
+  in, so test playback with a beep first.
+- `rig/no_aggregate` was created during this to rule out the aggregate.
+
 ## Spark GO latency: aggregate device (2026-11-20)
 
 - The Spark GO shows up as two Core Audio devices with separate clocks: 34.6 ms round trip and ~90 glitches/min

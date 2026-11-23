@@ -1,9 +1,9 @@
 #!/bin/bash
-# Opens the rig whenever the Spark GO shows up (switched on / plugged in) and no rig window is open.
+# Opens the rig whenever the Spark GO, a Scarlett or a UR22 shows up (switched on / plugged in) and no rig window is open.
 # Runs in the background from ~/Library/LaunchAgents/com.guitarrig.sparkwatch.plist (see install_watch.sh).
 cd "$(dirname "$0")"
 PY=../.venv/bin/python
-here() { "$PY" -c 'import sounddevice as sd, sys; sys.exit(not any("Spark GO USB" in d["name"] for d in sd.query_devices()))' 2>/dev/null; }
+here() { "$PY" -c 'import sounddevice as sd, sys; sys.exit(not any(n in d["name"] for d in sd.query_devices() for n in ("Spark GO USB", "Scarlett", "UR22")))' 2>/dev/null; }
 was_here=false
 while true; do
     if pgrep -f "Guitar Rig.command" >/dev/null; then

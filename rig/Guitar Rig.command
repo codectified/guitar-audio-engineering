@@ -7,7 +7,7 @@ if [ ! -x "$VENV/bin/python" ]; then
     python3 -m venv "$VENV" && "$VENV/bin/pip" install -q -r ../requirements.txt || { read -p "Setup failed. Press Enter to close."; exit 1; }
 fi
 device_here() { "$VENV/bin/python" -c 'import sounddevice as sd, sys
-sys.exit(not any(n in d["name"] for d in sd.query_devices() for n in ("Spark GO USB", "Scarlett")))' 2>/dev/null; }
+sys.exit(not any(n in d["name"] for d in sd.query_devices() for n in ("Spark GO USB", "Scarlett", "UR22")))' 2>/dev/null; }
 spark_aggregate() {
     [ -e no_aggregate ] && { [ -x spark_aggregate ] && ./spark_aggregate --remove >/dev/null; return; }  # opt-out
     # Join the Spark GO's separate in/out devices into one (8 ms instead of 35 ms). Rebuilt each start because
@@ -28,7 +28,7 @@ while true; do
     elif [ $code -eq 12 ]; then ARGS=("$@" --input-channel 2)
     elif [ $code -eq 13 ] || { [ $code -ne 0 ] && ! device_here; }; then
         # 13 = the interface went away mid-session (Spark switched off, Bluetooth took it): wait, then carry on
-        device_here || echo "Waiting for the Spark GO / Scarlett to come back (switch it on; close this window to give up)..."
+        device_here || echo "Waiting for the audio interface to come back (switch it on; close this window to give up)..."
         until device_here; do sleep 3; done
         echo "Retrying in 5 s (if Bluetooth music is playing on the Spark, the rig comes back when it stops)..."
         sleep 5  # gives Core Audio a moment, and keeps retries slow while the Spark's USB audio is stalled
