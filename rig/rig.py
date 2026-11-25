@@ -82,6 +82,13 @@ def rat(gain_db=32, filter_hz=3000, level_db=-24):
     ]
 
 
+def sustainer(threshold_db=-42, ratio=8, makeup_db=23):
+    """Compressor pedal for sustain (Dyna Comp / CS-3 style): squashes the pick attack and lifts the note as it
+    fades, so it rings on longer and drives the amp harder for longer. Slow release so the tail stays lifted."""
+    return [Compressor(threshold_db=threshold_db, ratio=ratio, attack_ms=8, release_ms=300),
+            Gain(gain_db=makeup_db)]
+
+
 def log(msg):
     """Append a timestamped line to rig.log. Main thread only: file I/O in the audio callback causes dropouts."""
     try:
@@ -1007,21 +1014,35 @@ class Looper:
     along to what you hear, which comes out of the speaker ~9 ms late, so without this every overdub would
     land late. Each overdub is a separate layer, so undo takes off the last one.
 
+    Auto mode (v: 1, 2 or 4 bars; drums on): every press counts you in for a bar (clicks on each beat), records
+    the next 1/2/4 bars, then plays them back y times (2 by default) and stops. Press again for the next take,
+    even while a loop is playing: it carries on through the count-in. Pressing during a count-in or take cancels.
+
     Timing is in samples since the stream started (the same clock as Backing.pos). "Music time" is when a
     sample was sent to the speaker; what the input delivers at callback time t was played at music time
     t - latency."""
     MAX_S = 60  # longest loop
     FADE_S = 0.01  # start/stop fades, so it doesn't click
     LATE_PRESS = 1 / 8  # a press up to an eighth of a bar after beat 1 still counts as on beat 1
+    AUTO_BARS = [0, 1, 2, 4]  # 0 = manual
+    REPEATS = [1, 2, 3, 4, 0]  # times an auto take plays back; 0 = until you stop it
 
     def __init__(self):
         self.history = np.zeros(int((self.MAX_S + 10) * SR), np.float32)  # the guitar, always, newest last
         self.latency = 0  # round trip in samples; set once the stream is open
         self.commands = collections.deque()  # from the key thread; run at the start of the next audio block
         self.level_db = 0.0
+        self.auto_bars = 2
+        self.repeats = 2
+        self.gen = 0  # bumped whenever the loop is thrown away, so a stale offer from maintain() is ignored
+        self.offer = None  # (gen, kind, ...): an array maintain() made, for the callback to adopt
         self.clear()
 
     def clear(self):
+        self.gen += 1
+        self.take = None  # an auto take on its way: (count-in start, loop start, loop end), music time
+        self.auto_take = False  # the loop being recorded is an auto take
+        self.end_at = None  # music time an auto take stops playing
         self.state = "empty"  # empty / recording / playing / overdub / stopped
         # The audio callback never allocates or copies whole loops (60 s of copying in a 0.7 ms block would
         # crackle): maintain(), on the main thread, does that and swaps the results in
@@ -1041,15 +1062,30 @@ class Looper:
         self.commands.append(cmd)
 
     def maintain(self):
-        """Main thread, every few ms: the slow parts, done off the audio thread."""
-        if self.mix is None and self.length and self.state != "recording":
-            h, start = len(self.history), (self.m0 + self.latency) % len(self.history)
-            first = self.history[start:start + self.length]
-            self.mix = np.concatenate((first, self.history[:self.length - len(first)]))
-        if self.undo_layer is not None and self.mix is not None:
-            self.mix, self.undo_layer = self.mix - self.undo_layer, None
-        if self.mix is not None and self.spare is None:
-            self.spare = np.zeros_like(self.mix)
+        """Main thread, every few ms: the slow parts (copying, allocating), offered to the callback to adopt."""
+        if self.offer is not None:
+            return
+        gen, mix, undo = self.gen, self.mix, self.undo_layer
+        if mix is None and self.length and self.state != "recording":
+            n, h = self.length, len(self.history)
+            start = (self.m0 + self.latency) % h
+            first = self.history[start:start + n]
+            self.offer = (gen, "mix", np.concatenate((first, self.history[:n - len(first)])))
+        elif undo is not None and mix is not None:
+            self.offer = (gen, "undo", undo, mix - undo)
+        elif mix is not None and self.spare is None:
+            self.offer = (gen, "spare", np.zeros_like(mix))
+
+    def adopt(self):
+        offer, self.offer = self.offer, None
+        if offer is None or offer[0] != self.gen:
+            return
+        if offer[1] == "mix" and self.mix is None and len(offer[2]) == self.length:
+            self.mix = offer[2]
+        elif offer[1] == "undo" and self.undo_layer is offer[2]:
+            self.mix, self.undo_layer = offer[3], None
+        elif offer[1] == "spare" and self.mix is not None and self.spare is None and len(offer[2]) == len(self.mix):
+            self.spare = offer[2]
 
     @staticmethod
     def bar_grid(backing):
@@ -1080,6 +1116,19 @@ class Looper:
     def run(self, cmd, now, backing):
         """Returns False to try again next block (waiting on maintain())."""
         s = self.state
+        if cmd == "loop" and self.auto_bars and backing.active:
+            if self.take or s == "recording":
+                self.clear()  # pressed again during the count-in or the take: cancel
+                return True
+            start = self.quantize_start(now, backing)
+            bar = self.bar_grid(backing)[1]
+            m0 = int(start + bar)
+            self.take = (start, m0, int(m0 + self.auto_bars * bar))
+            for beat in range(4):  # count-in clicks, on top of the drums
+                at = int(start + beat * bar / 4)
+                if at >= now:
+                    backing.add(backing.sounds["click_accent" if beat == 0 else "click"], at - now, 1.0)
+            return True
         if cmd == "loop":
             if s == "empty":
                 self.m0, self.m1, self.state = self.quantize_start(now, backing), None, "recording"
@@ -1095,7 +1144,12 @@ class Looper:
                 self.state = "playing"
             elif s == "stopped":
                 self.m0, self.state = self.quantize_start(now, backing), "playing"
+                if self.auto_bars and self.repeats and backing.active:  # an auto take plays its repeats again
+                    self.end_at = self.m0 + self.repeats * self.length
         elif cmd == "stop":
+            if self.take:
+                self.take = None
+                return True
             if s == "recording":
                 self.m1 = self.quantize_end(now, backing)
                 self.stop_after_record = True
@@ -1129,6 +1183,15 @@ class Looper:
             if not self.run(self.commands[0], now, backing):
                 break
             self.commands.popleft()
+        self.adopt()
+
+        if self.take:
+            _, m0, m1 = self.take
+            if self.state in ("playing", "overdub") and now + frames >= m0 - self.FADE_S * SR:
+                self.state = "stopped"  # the old loop fades out just before the new take starts
+            if now + frames >= m0:
+                self.clear()  # recording reads the history from m0 on, so starting a block late loses nothing
+                self.m0, self.m1, self.state, self.auto_take = m0, m1, "recording", True
 
         if self.state == "recording":
             if self.m1 is None and now - self.m0 >= self.MAX_S * SR:
@@ -1139,6 +1202,11 @@ class Looper:
             self.length = self.m1 - self.m0
             self.state = "stopped" if self.stop_after_record else "playing"
             self.stop_after_record = False
+            if self.auto_take and self.repeats:
+                self.end_at = self.m1 + self.repeats * self.length
+            self.auto_take = False
+        if self.end_at is not None and now + frames >= self.end_at - self.FADE_S * SR and self.state == "playing":
+            self.state, self.end_at = "stopped", None
         if not self.length:
             return np.zeros(frames, np.float32)
         n, mix = self.length, self.mix
@@ -1169,14 +1237,30 @@ class Looper:
         return out.astype(np.float32)
 
     def describe(self):
+        now = self.loop_now
+        if self.take:
+            start, m0, _ = self.take
+            if now < start:
+                return "◌ COUNT-IN next bar"
+            return f"◌ COUNT-IN {4 - int(4 * (now - start) / (m0 - start))}"
         if self.state == "empty":
             return ""
         if self.state == "recording":
-            secs = 0 if self.m0 is None else max(0, self.loop_now - self.m0) / SR
+            secs = 0 if self.m0 is None else max(0, now - self.m0) / SR
+            if self.auto_take:
+                return f"● REC {secs:.1f}s of {(self.m1 - self.m0) / SR:.1f}s"
             return f"● REC {secs:.1f}s" + (" (closing on the bar)" if self.m1 else "")
-        n = self.length / SR
+        n = self.length
         word = {"playing": "▶ LOOP", "overdub": "● DUB", "stopped": "■ LOOP"}[self.state]
-        return f"{word} {n:.1f}s +{len(self.layers) + (self.layer is not None)}"
+        if self.state == "playing" and self.end_at is not None:
+            return f"{word} {max(1, self.repeats - int(np.ceil((self.end_at - now) / n)) + 1)}/{self.repeats}"
+        return f"{word} {n / SR:.1f}s +{len(self.layers) + (self.layer is not None)}"
+
+    def mode(self):
+        if not self.auto_bars:
+            return "Looper: manual (space = record / play / overdub)"
+        return (f"Looper: auto, {self.auto_bars} bar{'s' if self.auto_bars > 1 else ''}, plays "
+                + (f"{self.repeats}x" if self.repeats else "until you stop it") + " (needs the drums on)")
 
 
 class Rig:
@@ -1200,6 +1284,8 @@ class Rig:
         self.wah = AutoWah()
         self.rat = Pedalboard(rat())  # g: a RAT on the floor in front of any preset
         self.rat_on = False
+        self.sustain = Pedalboard(sustainer())  # u: compressor pedal in front of any preset
+        self.sustain_on = False
         self.pre = {k: stage() for k, stage in PRE_STAGES.items()}
         self.backing = Backing()
         self.looper = Looper()
@@ -1267,6 +1353,8 @@ class Rig:
         x = self.input_hpf(x[np.newaxis, :], SR, reset=False)
         self.in_peak = max(self.in_peak * 0.9, float(np.abs(x).max()))
         x = self.wah(x)
+        if self.sustain_on:
+            x = self.sustain(x, SR, reset=False)
         if self.rat_on:
             x = self.rat(x, SR, reset=False)
 
@@ -1369,6 +1457,7 @@ def menu(rig):
         "   i      swap input channel (auto-detected at startup by strumming)",
         "   w      auto-wah on/off: an envelope filter in front of the amp (pick harder = more quack)",
         "   g      ProCo RAT distortion on/off, in front of any preset (f has one built in)",
+        "   u      sustain (compressor pedal) on/off: notes ring on longer, in front of any preset",
         "   e      auto-wah sensitivity: low / med / high (try high for soft or clean playing)",
         section("TUNER"),
         "   t      tuner on/off (mutes the output while tuning)",
@@ -1386,10 +1475,14 @@ def menu(rig):
         "   ; / '  backing volume -/+ 3 dB",
         "   p      song backing: drums + bass + chords (Comfortably Numb outro solo, Bm 63 BPM) / off",
         section("LOOPER"),
-        "   space  record -> play -> overdub -> play ... (the first loop sets the length; with drums on it",
-        "          snaps to whole bars from beat 1). A USB footswitch that types space or Enter works too",
+        "   space  AUTO (default, drums on): a bar of count-in clicks, records the next 2 bars, plays them",
+        "          back 2x, stops. Press again for the next take (even mid-loop); again during it = cancel",
+        "          MANUAL (or drums off): record -> play -> overdub -> play ... (first loop sets the length)",
+        "          A USB footswitch that types space or Enter works too",
+        "   v      loop mode: manual / auto 1 bar / auto 2 bars / auto 4 bars",
+        "   y      auto playbacks: 1 / 2 / 3 / 4 / until stopped",
         "   a      stop / play again from the top",
-        "   z      undo the last overdub",
+        "   z      undo the last overdub (manual)",
         "   c      clear the loop",
         section("OTHER"),
         "   h      show this menu again",
@@ -1466,6 +1559,10 @@ def main():
     ap.add_argument("--setup-nam", choices=list(PRESETS), metavar="PRESET_KEY",
                     help="load a Neural Amp Modeler capture into a preset (1-4 or 0)")
     args = ap.parse_args()
+    # The audio callback is Python too, so it needs the GIL. By default Python only hands it over every 5 ms,
+    # so any main-thread work (status line, preset switch, pre-rendering chords) could hold the callback up for
+    # 5-8 ms against a 0.7 ms budget: crackle. 0.1 ms keeps that wait under the budget.
+    sys.setswitchinterval(0.0001)
 
     if args.setup_nam:
         return setup_nam(args.setup_nam)
@@ -1675,6 +1772,18 @@ def main():
                     rig.looper.press("undo")
                 elif k == "c":
                     rig.looper.press("clear")
+                elif k in "vy":
+                    lp = rig.looper
+                    if k == "v":
+                        lp.auto_bars = lp.AUTO_BARS[(lp.AUTO_BARS.index(lp.auto_bars) + 1) % len(lp.AUTO_BARS)]
+                    else:
+                        lp.repeats = lp.REPEATS[(lp.REPEATS.index(lp.repeats) + 1) % len(lp.REPEATS)]
+                    sys.stdout.write("\r\x1b[K")
+                    print(lp.mode())
+                    globals()["_announce_rows"] = 0
+                elif k == "u":
+                    rig.sustain_on = not rig.sustain_on
+                    rig.sustain.reset()
                 elif k in ";'":
                     rig.backing.level_db = float(np.clip(rig.backing.level_db + (3 if k == "'" else -3), -30, 12))
             rig.looper.maintain()
@@ -1687,7 +1796,7 @@ def main():
             elif scale is not None:
                 status = f"\r[{PRESETS[rig.current][0]}] " + scale_display(heard, SCALES[scale], root)
             else:
-                pedals = " ".join(f for f, on in ((f"wah:{rig.wah.sensitivity}", rig.wah.on), ("RAT", rig.rat_on)) if on)
+                pedals = " ".join(f for f, on in ((f"wah:{rig.wah.sensitivity}", rig.wah.on), ("SUS", rig.sustain_on), ("RAT", rig.rat_on)) if on)
                 flag = "MUTED" if rig.muted else pedals
                 beat = f"♪ {rig.backing.describe()}  " if rig.backing.active else ""
                 if rig.looper.state != "empty":

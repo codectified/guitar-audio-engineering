@@ -37,6 +37,7 @@ rig's window is focused.
 | `m` | mute (hit this if it ever howls) |
 | `w` / `e` | auto-wah on/off / sensitivity |
 | `g` | ProCo RAT distortion on/off, in front of any preset |
+| `u` | sustain: compressor pedal in front of any preset (notes ring about twice as long) |
 | `t` | tuner on/off. **The tuner mutes the output**: no sound? press `t` |
 | `n` | next tuning (turns the tuner on) |
 | `s` / `r` | scale trainer: next scale / next root |
@@ -45,7 +46,8 @@ rig's window is focused.
 | `k` / `l` | 12-bar blues bass line on/off / bass key (E A G C D) |
 | `;` / `'` | backing volume |
 | `p` | song backing: drums + bass + chords (Comfortably Numb outro solo, Bm, 63 BPM) / off |
-| space | looper: record → play → overdub → play … (first loop sets the length; snaps to whole bars when the drums are on; a USB footswitch that types space/Enter works) |
+| space | looper. **Auto** (default, drums on): a bar of count-in clicks, records the next 2 bars, plays them back 2×, stops; press again for the next take. **Manual** (or drums off): record → play → overdub → play … A USB footswitch that types space/Enter works |
+| `v` / `y` | loop mode (manual / auto 1, 2, 4 bars) / auto playbacks (1, 2, 3, 4, until stopped) |
 | `a` / `z` / `c` | looper: stop/play from the top / undo last overdub / clear |
 | `x` / `q` | restart / quit |
 
