@@ -799,14 +799,36 @@ PRE_STAGES = {"o": Octaver}
 
 class Backing:
     """Practice backing: a drum machine and a 12-bar blues bass line, synthesized (no sample files) and mixed
-    into the output. Patterns are steps per bar: X = accent, x = hit, o = ghost note."""
+    into the output. Patterns: one character per step, X = accent, x = hit, o = ghost note, . = rest; spaces
+    are only for reading (one group per beat). Every bar is 4 beats; steps per beat is 4 for a 16th-note grid,
+    3 for a triplet / 12/8 grid. A pattern can run over several bars (the son clave takes two): it just has to
+    be a whole number of bars long."""
     STYLES = [  # (name, steps per beat, {instrument: pattern})
-        ("click", 4, {"click": "X...x...x...x..."}),
-        ("rock", 4, {"kick": "X.......X.x.....", "snare": "....X.......X...", "hat": "x.o.x.o.x.o.x.o."}),
-        ("shuffle", 3, {"kick": "X.....x.....", "snare": "...X.....X..", "hat": "x.ox.ox.ox.o"}),  # triplet feel
-        ("funk", 4, {"kick": "X..x......X..x..", "snare": "....X..o.o..X..o", "hat": "xoxoxoxoxoxoxoxo"}),
-        ("half-time", 4, {"kick": "X.....x.........", "snare": "........X.......", "hat": "x.x.x.x.x.x.x.x."}),
+        ("click", 4, {"click": "X... x... x... x..."}),
+        ("rock", 4, {"kick": "X... .... X.x. ....", "snare": ".... X... .... X...", "hat": "x.o. x.o. x.o. x.o."}),
+        ("shuffle", 3, {"kick": "X.. ... x.. ...", "snare": "... X.. ... X..", "hat": "x.o x.o x.o x.o"}),
+        # slow blues in 12/8: every triplet on the hat, backbeat on 2 and 4, a soft kick pickup into beat 3
+        ("12/8 slow blues", 3, {"kick": "X.. ..o X.. ...", "snare": "... X.. ... X..", "hat": "Xoo xoo xoo xoo"}),
+        # Purdie / "Rosanna" style: backbeat on 3 only, ghosted middle triplets, kick pushing into the backbeat
+        ("half-time shuffle", 3, {"kick": "X.. ..x ... ..x", "snare": ".o. .o. X.. .o.", "hat": "x.x x.x x.x x.x"}),
+        ("funk", 4, {"kick": "X..x .... ..X. .x..", "snare": ".... X..o .o.. X..o", "hat": "xoxo xoxo xoxo xoxo"}),
+        ("half-time", 4, {"kick": "X... ..x. .... ....", "snare": ".... .... X... ....", "hat": "x.x. x.x. x.x. x.x."}),
+        # one drop: nothing on 1, kick and cross-stick together on 3, swung hats leaning on the offbeats
+        ("reggae one drop", 3, {"kick": "... ... X.. ...", "rim": "... ... X.. ...", "hat": "o.x o.x o.x o.x"}),
+        # salsa / son, two bars: 3-2 son clave; cascara on the hat (x.xx.x.x on the 3 side, x.x.xx.x on the 2);
+        # the bass drum on the tumbao (2& and 4)
+        ("son clave 3-2", 4, {"clave": "X... ..X. .... X... | .... X... X... ....",
+                              "hat": "X... x.x. ..x. ..x. | x... x... x.x. ..x.",
+                              "kick": ".... ..x. .... X... | .... ..x. .... X..."}),
+        # Afro-Cuban 6/8 (bembe): the standard 7-stroke bell over four dotted-quarter pulses
+        ("Afro-Cuban 6/8", 3, {"bell": "X.x .xx .x. x.x", "kick": "X.. ... x.. ...", "hat": "o.. o.. o.. o.."}),
+        # Arabic rhythms on darbuka: doum = low centre stroke, tek = rim (X/x), ka = soft rim (o)
+        ("maqsum", 4, {"doum": "X... .... X... ....", "tek": "..X. o.X. ..o. X.o."}),  # D T - T D - T -
+        ("saidi", 4, {"doum": "X... ..X. X... ....", "tek": "..X. o... ..o. X.o."}),  # D T - D D - T -
+        ("malfuf", 4, {"doum": "X... .... X... ....", "tek": "...X ..X. ...X ..X."}),  # D - - T - - T - (3+3+2)
     ]
+    STYLES = [(name, per_beat, {inst: hits.replace(" ", "").replace("|", "") for inst, hits in pattern.items()})
+              for name, per_beat, pattern in STYLES]
     HIT = {"X": 1.0, "x": 0.6, "o": 0.3}
     TWELVE_BAR = [0, 0, 0, 0, 5, 5, 0, 0, 7, 5, 0, 7]  # I I I I IV IV I I V IV I V(turnaround), in semitones
     BOOGIE = [0, 4, 7, 9, 10, 9, 7, 4]  # eighth notes over each bar: root 3 5 6 b7 6 5 3
@@ -848,6 +870,18 @@ class Backing:
                    * decay(0.08, 0.018),
             "click": 0.5 * np.sin(2 * np.pi * 1000 * t(0.05)) * decay(0.05, 0.012),
             "click_accent": 0.6 * np.sin(2 * np.pi * 1600 * t(0.05)) * decay(0.05, 0.012),
+            # cross-stick: a short woody knock
+            "rim": 0.3 * (np.sin(2 * np.pi * 1700 * t(0.06)) * decay(0.06, 0.008)
+                          + 0.6 * np.sin(2 * np.pi * 480 * t(0.06)) * decay(0.06, 0.015)),
+            "clave": 0.4 * np.sin(2 * np.pi * 2500 * t(0.08)) * decay(0.08, 0.025),
+            # cowbell: two detuned square-ish tones, the classic analog recipe
+            "bell": 0.12 * Pedalboard([HighpassFilter(cutoff_frequency_hz=400), LowpassFilter(cutoff_frequency_hz=4000)])(
+                sum(np.sign(np.sin(2 * np.pi * f * t(0.3))) for f in (562, 845))[None, :].astype(np.float32), SR)[0]
+                    * decay(0.3, 0.07),
+            # darbuka: doum is the deep centre stroke (slight pitch drop), tek the sharp rim crack
+            "doum": 0.8 * np.sin(2 * np.pi * np.cumsum(85 + 30 * np.exp(-t(0.4) / 0.03)) / SR) * decay(0.4, 0.14),
+            "tek": 0.3 * Pedalboard([HighpassFilter(cutoff_frequency_hz=2500)])(noise(0.06)[None, :], SR)[0]
+                   * decay(0.06, 0.01) + 0.25 * np.sin(2 * np.pi * 900 * t(0.06)) * decay(0.06, 0.012),
         }
         self.sounds = {k: v.astype(np.float32) for k, v in self.sounds.items()}
         self.bass_tone = Pedalboard([LowpassFilter(cutoff_frequency_hz=900)])
@@ -875,10 +909,12 @@ class Backing:
         """Start the pattern from beat 1 at the next block."""
         self.step, self.next_step = 0, float(self.pos)
 
-    def next_style(self):
+    def next_style(self, step=1):
+        """b: next groove, B (step -1): previous; off sits between the last and the first."""
         if self.song is not None:  # leaving the song: start the drum styles from the top
             self.song, self.style, self.bass = None, None, False
-        self.style = 0 if self.style is None else (self.style + 1 if self.style + 1 < len(self.STYLES) else None)
+        order = [None] + list(range(len(self.STYLES)))
+        self.style = order[(order.index(self.style) + step) % len(order)]
         self.restart()
 
     def next_song(self):
@@ -957,7 +993,7 @@ class Backing:
         bar_steps = per_beat * 4
         in_bar, bar = self.step % bar_steps, self.step // bar_steps
         for inst, hits in pattern.items():
-            hit = hits[in_bar]
+            hit = hits[self.step % len(hits)]  # patterns may be longer than a bar
             if hit != ".":
                 sound = "click_accent" if inst == "click" and hit == "X" else inst
                 self.add(self.sounds[sound], offset, self.HIT[hit])
@@ -1011,38 +1047,39 @@ class Looper:
     """Live looper, after the presets: it records the guitar exactly as you hear it (not the drums), so you
     can loop a clean rhythm and solo over it with fuzz.
 
-    One button (space, or a footswitch that types space/Enter): record -> play -> overdub -> play -> ...
-    The first loop sets the length. With the drums on, it snaps to whole bars that start on beat 1, so the
-    loop stays locked to the drums. Everything recorded is shifted back by the round-trip latency: you play
-    along to what you hear, which comes out of the speaker ~9 ms late, so without this every overdub would
-    land late. Each overdub is a separate layer, so undo takes off the last one.
+    With the drums on (auto mode): space counts you in for a bar (clicks on each beat), records the next
+    4 bars (v / V: 1-12, or manual), and loops them until you stop or clear it. Space while it loops lays a
+    new layer on top: a bar of count-in before the loop comes back round to its bar 1, then one pass of the
+    whole loop, and the loop never stops. Space during a count-in or a take cancels it; space while stopped
+    starts a fresh loop.
 
-    Auto mode (the default with the drums on): space counts you in for a bar (clicks on each beat), records the
-    next bar (v: 1, 2 or 4), and loops it until you stop or clear it. Space while it loops does the same on top:
-    a bar of count-in, then one pass of the loop recorded as a new layer, and the loop keeps going. Space during
-    a count-in or a take cancels it. Space while stopped starts over with a fresh loop.
+    Timing: everything is in samples since the stream started (Backing.pos). "Music time" is when a sample
+    was sent to the speaker, the same clock the drums play on; what the input delivers at callback time t
+    was played at music time t - latency, so overdubs land where you meant them. A loop starts exactly on a
+    drum bar line, and its length is kept as the exact (fractional) number of samples in N bars, not
+    rounded, so it never drifts against the drums however long it runs.
 
-    Timing is in samples since the stream started (the same clock as Backing.pos). "Music time" is when a
-    sample was sent to the speaker; what the input delivers at callback time t was played at music time
-    t - latency."""
-    MAX_S = 60  # longest loop
+    Without the drums, space is a manual looper: record -> play -> overdub -> play... (the first loop sets
+    the length). Each overdub is a separate layer, so undo takes off the last one."""
+    MAX_S = 75  # longest loop: 12 bars at the slowest tempo (40 BPM) is 72 s
     FADE_S = 0.01  # start/stop fades, so it doesn't click
     LATE_PRESS = 1 / 8  # a press up to an eighth of a bar after beat 1 still counts as on beat 1
-    AUTO_BARS = [1, 2, 4, 0]  # 0 = manual
+    MAX_BARS = 12
 
     def __init__(self):
         self.history = np.zeros(int((self.MAX_S + 10) * SR), np.float32)  # the guitar, always, newest last
         self.latency = 0  # round trip in samples; set once the stream is open
         self.commands = collections.deque()  # from the key thread; run at the start of the next audio block
         self.level_db = 0.0
-        self.auto_bars = 1
+        self.auto_bars = 4  # 0 = manual
         self.gen = 0  # bumped whenever the loop is thrown away, so a stale offer from maintain() is ignored
         self.offer = None  # (gen, kind, ...): an array maintain() made, for the callback to adopt
         self.clear()
 
     def clear(self):
         self.gen += 1
-        self.take = None  # an auto take on its way: (count-in start, take start, take end, "new"/"dub"), music time
+        # an auto take on its way: dict(start=count-in start, m0, m1, kind="new"/"dub", bar, bars), music time
+        self.take = None
         self.auto_take = False  # the loop being recorded is an auto take
         self.state = "empty"  # empty / recording / playing / overdub / stopped
         # The audio callback never allocates or copies whole loops (60 s of copying in a 0.7 ms block would
@@ -1053,7 +1090,9 @@ class Looper:
         self.layer = None  # the overdub being recorded
         self.undo_layer = None  # a layer for maintain() to take off the mix
         self.m0 = self.m1 = None  # music time the loop starts at, and (while recording) ends at
-        self.length = 0
+        self.length = 0  # samples stored: ceil(period)
+        self.period = 0.0  # exact loop length in samples (fractional: N bars of the drums)
+        self.bars = 0  # bars in the loop, for the display; 0 when the drums weren't on
         self.od_on = self.od_off = None  # callback times an overdub starts / stops writing
         self.gain = 0.0
         self.stop_after_record = False
@@ -1090,7 +1129,8 @@ class Looper:
 
     @staticmethod
     def bar_grid(backing):
-        """(time of the next beat 1, bar length) in samples, or None when the drums are off."""
+        """(exact time of the next beat 1, bar length), both fractional samples; None when the drums are off.
+        The drums play each step at the sample floor(step time), so floor() of these lands on the same sample."""
         if not backing.active:
             return None
         per_beat = backing.groove()[0]
@@ -1100,50 +1140,55 @@ class Looper:
         return backing.next_step + ahead * step_len, bar_steps * step_len
 
     def quantize_start(self, now, backing):
+        """The bar line a press at `now` means (fractional samples): the next one, or the one just gone if the
+        press was only a little late."""
         grid = self.bar_grid(backing)
         if grid is None:
             return now
         nxt, bar = grid
         prev = nxt - bar
-        return int(prev if now - prev < bar * self.LATE_PRESS else nxt)
+        return prev if now - prev < bar * self.LATE_PRESS else nxt
 
     def quantize_end(self, now, backing):
         grid = self.bar_grid(backing)
         if grid is None:
             return max(now, self.m0 + int(0.25 * SR))
         bar = grid[1]
-        return self.m0 + int(round(max(1, round((now - self.m0) / bar)) * bar))
+        return self.m0 + int(np.ceil(max(1, round((now - self.m0) / bar)) * bar))
+
+    def loop_pos(self, t):
+        """Position in the loop of music times t (array). Uses the exact period, so it stays on the drums."""
+        return np.minimum(((t - self.m0) % self.period).astype(np.int64), self.length - 1)
 
     def run(self, cmd, now, backing):
         """Returns False to try again next block (waiting on maintain())."""
         s = self.state
         if cmd == "loop" and self.auto_bars and backing.active:
             # pressed again during a count-in or a take: cancel it (a layer goes, the loop keeps playing)
-            if self.take and self.take[3] == "dub" or s == "overdub":
+            if self.take and self.take["kind"] == "dub" or s == "overdub":
                 return self.cancel_layer()
             if self.take or s == "recording":
                 self.clear()
                 return True
-            start = self.quantize_start(now, backing)
             bar = self.bar_grid(backing)[1]
-            m0 = int(start + bar)
-            if s == "playing":  # layer on top: one pass of the loop, starting on a bar line of it
+            earliest = self.quantize_start(now, backing) + bar  # one bar of count-in at least
+            if s == "playing":
+                # layer on top: wait for the loop to come round to its bar 1, then one whole pass
                 if self.spare is None or self.undo_layer is not None or self.layer is not None:
                     return False  # a spare layer is a few ms away
+                passes = np.ceil((earliest - self.m0 - bar * self.LATE_PRESS) / self.period)
+                m0 = int(self.m0 + passes * self.period)
                 self.layer, self.spare = self.spare, None
-                self.od_on, self.od_off = m0 + self.latency, m0 + self.length + self.latency
-                self.take = (int(m0 - bar), m0, m0 + self.length, "dub")
-                start = m0 - bar
+                self.od_on, self.od_off = m0 + self.latency, m0 + int(round(self.period)) + self.latency
+                self.take = dict(start=m0 - bar, m0=m0, m1=m0 + self.length, kind="dub", bar=bar, bars=self.bars)
             else:
-                self.take = (start, m0, int(m0 + self.auto_bars * bar), "new")
-            for beat in range(4):  # count-in clicks, on top of the drums
-                at = int(start + beat * bar / 4)
-                if at >= now:
-                    backing.add(backing.sounds["click_accent" if beat == 0 else "click"], at - now, 1.0)
+                bars = max(1, min(self.auto_bars, int(self.MAX_S * SR / bar)))
+                self.take = dict(start=earliest - bar, m0=int(earliest), m1=int(earliest) + int(np.ceil(bars * bar)),
+                                 kind="new", bar=bar, bars=bars)
             return True
         if cmd == "loop":
             if s == "empty":
-                self.m0, self.m1, self.state = self.quantize_start(now, backing), None, "recording"
+                self.m0, self.m1, self.state = int(self.quantize_start(now, backing)), None, "recording"
             elif s == "recording":
                 self.m1 = self.quantize_end(now, backing)
             elif s == "playing":
@@ -1155,15 +1200,15 @@ class Looper:
                 self.od_off = now + self.latency
                 self.state = "playing"
             elif s == "stopped":
-                self.m0, self.state = self.quantize_start(now, backing), "playing"
+                self.restart(now, backing)
         elif cmd == "stop":
-            if self.take and self.take[3] == "new":
+            if self.take and self.take["kind"] == "new":
                 self.take = None
                 return True
             if self.take and not self.cancel_layer():  # a layer still counting in goes; the loop stops too
                 return False
             if s == "stopped":
-                self.m0, self.state = self.quantize_start(now, backing), "playing"
+                self.restart(now, backing)
                 return True
             if s == "recording":
                 self.m1 = self.quantize_end(now, backing)
@@ -1187,6 +1232,10 @@ class Looper:
             self.clear()
         return True
 
+    def restart(self, now, backing):
+        """Play a stopped loop again from its top, on the next bar line."""
+        self.m0, self.state = int(self.quantize_start(now, backing)), "playing"
+
     def cancel_layer(self):
         """Drop an auto layer that's counting in (nothing written yet) or recording. False = try again."""
         if self.take:  # still counting in: the layer is all zeros, so it goes back as the spare
@@ -1209,16 +1258,23 @@ class Looper:
             self.commands.popleft()
         self.adopt()
 
-        if self.take and self.take[3] == "dub":
-            if now >= self.take[1]:
-                self.take, self.state = None, "overdub"  # writing already starts on time (od_on)
-        elif self.take:
-            _, m0, m1, _ = self.take
-            if self.state in ("playing", "overdub") and now + frames >= m0 - self.FADE_S * SR:
-                self.state = "stopped"  # the old loop fades out just before the new take starts
-            if now + frames >= m0:
-                self.clear()  # recording reads the history from m0 on, so starting a block late loses nothing
-                self.m0, self.m1, self.state, self.auto_take = m0, m1, "recording", True
+        take = self.take
+        if take:
+            # count-in clicks, played as their time comes (so a cancelled take never leaves clicks behind)
+            for beat in range(4):
+                at = int(take["start"] + beat * take["bar"] / 4)
+                if now <= at < now + frames:
+                    backing.add(backing.sounds["click_accent" if beat == 0 else "click"], at - now, 1.0)
+            if take["kind"] == "dub":
+                if now >= take["m0"]:
+                    self.take, self.state = None, "overdub"  # the layer already writes from m0 (od_on)
+            else:
+                if self.state in ("playing", "overdub") and now + frames >= take["m0"] - self.FADE_S * SR:
+                    self.state = "stopped"  # the old loop fades out just before the new take starts
+                if now + frames >= take["m0"]:
+                    self.clear()  # recording reads the history from m0 on, so starting a block late loses nothing
+                    self.m0, self.m1, self.state, self.auto_take = take["m0"], take["m1"], "recording", True
+                    self.period, self.bars = take["bars"] * take["bar"], take["bars"]
 
         if self.state == "recording":
             if self.m1 is None and now - self.m0 >= self.MAX_S * SR:
@@ -1227,12 +1283,18 @@ class Looper:
                 return np.zeros(frames, np.float32)
             # the loop's last sample has arrived; maintain() cuts it out of the history, until then play it there
             self.length = self.m1 - self.m0
+            if not self.auto_take:  # manual: the length is what it is; with the drums on it's whole bars
+                self.period = float(self.length)
+                grid = self.bar_grid(backing)
+                self.bars = int(round(self.length / grid[1])) if grid else 0
+                if grid and self.bars:
+                    self.period = min(self.bars * grid[1], float(self.length))
             self.state = "stopped" if self.stop_after_record else "playing"
             self.stop_after_record = False
             self.auto_take = False
         if not self.length:
             return np.zeros(frames, np.float32)
-        n, mix = self.length, self.mix
+        mix = self.mix
         t = now + np.arange(frames)
 
         # overdub: input at callback time t was played at music time t - latency
@@ -1241,7 +1303,7 @@ class Looper:
             if self.od_off is not None:
                 write &= t < self.od_off
             if write.any():
-                pos = (t[write] - self.latency - self.m0) % n
+                pos = self.loop_pos(t[write] - self.latency)
                 self.layer[pos] += y[write]
                 mix[pos] += y[write]
             if self.od_off is not None and now + frames >= self.od_off:
@@ -1256,35 +1318,48 @@ class Looper:
         self.gain = float(ramp[-1])
         if self.gain == 0 and target == 0:
             return np.zeros(frames, np.float32)
-        pos = (t - self.m0) % n
+        pos = self.loop_pos(t)
         sound = mix[pos] if mix is not None else self.history[(self.m0 + self.latency + pos) % h]
         out = np.where(t >= self.m0, sound, 0) * ramp * 10 ** (self.level_db / 20)  # a restart waits for beat 1
         return out.astype(np.float32)
 
+    def where(self, t, bar, bars):
+        """'bar 2/4 beat 3' for music time t in a phrase of `bars` bars starting at self.m0."""
+        into = max(0.0, (t - self.m0) % (bar * bars))
+        return f"bar {int(into // bar) + 1}/{bars} beat {int(into % bar // (bar / 4)) + 1}"
+
     def describe(self):
         now = self.loop_now
-        if self.take:
-            start, m0, _, kind = self.take
-            what = "LAYER " if kind == "dub" else ""
-            if now < start:
-                return f"◌ {what}COUNT-IN next bar"
-            return f"◌ {what}COUNT-IN {4 - int(4 * (now - start) / (m0 - start))}"
+        take = self.take
+        if take:
+            what = "LAYER" if take["kind"] == "dub" else f"REC {take['bars']} bar{'s' if take['bars'] > 1 else ''}"
+            if now < take["start"]:
+                return f"◌ {what} in {int(np.ceil((take['start'] - now) / take['bar']))} bar(s)"
+            return f"◌ COUNT-IN {4 - int(4 * (now - take['start']) / take['bar'])} ▸ {what}"
         if self.state == "empty":
             return ""
         if self.state == "recording":
-            secs = 0 if self.m0 is None else max(0, now - self.m0) / SR
             if self.auto_take:
-                return f"● REC {secs:.1f}s of {(self.m1 - self.m0) / SR:.1f}s"
+                bar = (self.m1 - self.m0) / self.bars
+                return f"● REC {self.where(min(now, self.m1 - 1), bar, self.bars)}"
+            secs = 0 if self.m0 is None else max(0, now - self.m0) / SR
             return f"● REC {secs:.1f}s" + (" (closing on the bar)" if self.m1 else "")
-        n = self.length
         word = {"playing": "▶ LOOP", "overdub": "● DUB", "stopped": "■ LOOP"}[self.state]
-        return f"{word} {n / SR:.1f}s +{len(self.layers) + (self.layer is not None)}"
+        layers = f" +{len(self.layers) + (self.layer is not None)}"
+        if self.bars and self.state != "stopped":
+            return f"{word} {self.where(now, self.period / self.bars, self.bars)}{layers}"
+        return f"{word} {self.length / SR:.1f}s{layers}"
 
     def mode(self):
         if not self.auto_bars:
             return "Looper: manual (space = record / play / overdub)"
-        return (f"Looper: auto, {self.auto_bars} bar{'s' if self.auto_bars > 1 else ''} "
+        return (f"Looper: {self.auto_bars} bar{'s' if self.auto_bars > 1 else ''} "
                 "(space = count in + record; again = count in + layer on top; needs the drums on)")
+
+    def change_bars(self, step):
+        """v / V: 1..12 bars, with manual after 12 (and before 1)."""
+        order = list(range(1, self.MAX_BARS + 1)) + [0]
+        self.auto_bars = order[(order.index(self.auto_bars) + step) % len(order)]
 
 
 class Rig:
@@ -1492,18 +1567,19 @@ def menu(rig):
         "          live which scale note you're on and whether your quarter-tone bends land",
         "   r      next root note",
         section("PRACTICE BACKING"),
-        "   b      drums: click / rock / blues shuffle / funk / half-time / off",
+        *textwrap.wrap("drums (B = back): " + " / ".join(st[0] for st in Backing.STYLES) + " / off", WIDTH - 10,
+                       initial_indent="   b      ", subsequent_indent=" " * 10),
         "   , / .  tempo -/+ 5 BPM",
         "   k      bass line on/off: boogie line through a 12-bar blues (works with or without drums)",
         "   l      bass key: E / A / G / C / D",
         "   ; / '  backing volume -/+ 3 dB",
         "   p      song backing: drums + bass + chords (Comfortably Numb outro solo, Bm 63 BPM) / off",
         section("LOOPER"),
-        "   space  (drums on) a bar of count-in clicks, then records 1 bar and loops it, forever",
-        "          space again: another count-in, then one pass recorded on top; the loop keeps going",
+        "   space  (drums on) a bar of count-in clicks, then records 4 bars and loops them, forever",
+        "          space again: count-in just before the loop's bar 1, then one pass recorded on top",
         "          space during a count-in or a take cancels it. Drums off: record -> play -> overdub ...",
         "          A USB footswitch that types space or Enter works too",
-        "   v      loop length: 1 bar / 2 bars / 4 bars / manual",
+        "   v / V  loop length +/- 1 bar: 1 ... 12 bars, then manual",
         "   a      stop / play again from the top",
         "   z      undo the last layer",
         "   c      clear the loop",
@@ -1717,6 +1793,7 @@ def main():
                     + "; ".join(d["name"] for d in sd.query_devices()))
                 return DEVICE_LOST_EXIT
             for k in pressed():
+                shifted = k in "BV"  # B / V step backwards; everything else ignores case (caps lock)
                 k = k.lower()
                 if k == "q":
                     print()
@@ -1778,7 +1855,7 @@ def main():
                     if not rig.wah.on:  # changing the sensitivity means you want to hear it
                         rig.wah.toggle()
                 elif k == "b":
-                    rig.backing.next_style()
+                    rig.backing.next_style(-1 if shifted else 1)
                 elif k in ",.":
                     rig.backing.bpm = int(np.clip(rig.backing.bpm + (5 if k == "." else -5), 40, 240))
                     rig.backing.prepare()
@@ -1798,7 +1875,7 @@ def main():
                     rig.looper.press("clear")
                 elif k == "v":
                     lp = rig.looper
-                    lp.auto_bars = lp.AUTO_BARS[(lp.AUTO_BARS.index(lp.auto_bars) + 1) % len(lp.AUTO_BARS)]
+                    lp.change_bars(-1 if shifted else 1)
                     sys.stdout.write("\r\x1b[K")
                     print(lp.mode())
                     globals()["_announce_rows"] = 0

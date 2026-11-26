@@ -41,13 +41,13 @@ rig's window is focused.
 | `t` | tuner on/off. **The tuner mutes the output**: no sound? press `t` |
 | `n` | next tuning (turns the tuner on) |
 | `s` / `r` | scale trainer: next scale / next root |
-| `b` | practice drums: click / rock / blues shuffle / funk / half-time / off |
+| `b` / `B` | practice drums, next / previous: click, rock, shuffle, 12/8 slow blues, half-time shuffle, funk, half-time, reggae one drop, son clave 3-2, Afro-Cuban 6/8, maqsum, saidi, malfuf, off |
 | `,` / `.` | tempo -/+ 5 BPM |
 | `k` / `l` | 12-bar blues bass line on/off / bass key (E A G C D) |
 | `;` / `'` | backing volume |
 | `p` | song backing: drums + bass + chords (Comfortably Numb outro solo, Bm, 63 BPM) / off |
-| space | looper (drums on): a bar of count-in clicks, then records 1 bar and loops it. Space again: another count-in, then one pass recorded on top while the loop keeps going. Space during a count-in/take cancels it. Drums off: record → play → overdub … A USB footswitch that types space/Enter works |
-| `v` | loop length: 1 / 2 / 4 bars / manual |
+| space | looper (drums on): a bar of count-in clicks, then records 4 bars and loops them; the status line shows `bar 2/4 beat 3`. Space again: a count-in just before the loop comes round to bar 1, then one pass recorded on top while the loop keeps going. Space during a count-in/take cancels it. Drums off: record → play → overdub … A USB footswitch that types space/Enter works |
+| `v` / `V` | loop length +/- 1 bar (1–12, then manual) |
 | `a` / `z` / `c` | looper: stop/play from the top / undo last layer / clear |
 | `x` / `q` | restart / quit |
 
