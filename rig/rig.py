@@ -84,8 +84,11 @@ def rat(gain_db=32, filter_hz=3000, level_db=-24):
 
 def sustainer(threshold_db=-42, ratio=8, makeup_db=23):
     """Compressor pedal for sustain (Dyna Comp / CS-3 style): squashes the pick attack and lifts the note as it
-    fades, so it rings on longer and drives the amp harder for longer. Slow release so the tail stays lifted."""
-    return [Compressor(threshold_db=threshold_db, ratio=ratio, attack_ms=8, release_ms=300),
+    fades, so it rings on longer and drives the amp harder for longer. Slow release so the tail stays lifted.
+    The gate first stops it lifting hiss by its full +23 dB too: into the octave fuzz that hiss came out as loud
+    sputter between notes (the sub-octave tracker ignores -54 dBFS, and lifted hiss sits above that)."""
+    return [NoiseGate(threshold_db=-55, ratio=10, attack_ms=1, release_ms=150),
+            Compressor(threshold_db=threshold_db, ratio=ratio, attack_ms=8, release_ms=300),
             Gain(gain_db=makeup_db)]
 
 
@@ -1014,9 +1017,10 @@ class Looper:
     along to what you hear, which comes out of the speaker ~9 ms late, so without this every overdub would
     land late. Each overdub is a separate layer, so undo takes off the last one.
 
-    Auto mode (v: 1, 2 or 4 bars; drums on): every press counts you in for a bar (clicks on each beat), records
-    the next 1/2/4 bars, then plays them back y times (2 by default) and stops. Press again for the next take,
-    even while a loop is playing: it carries on through the count-in. Pressing during a count-in or take cancels.
+    Auto mode (the default with the drums on): space counts you in for a bar (clicks on each beat), records the
+    next bar (v: 1, 2 or 4), and loops it until you stop or clear it. Space while it loops does the same on top:
+    a bar of count-in, then one pass of the loop recorded as a new layer, and the loop keeps going. Space during
+    a count-in or a take cancels it. Space while stopped starts over with a fresh loop.
 
     Timing is in samples since the stream started (the same clock as Backing.pos). "Music time" is when a
     sample was sent to the speaker; what the input delivers at callback time t was played at music time
@@ -1024,25 +1028,22 @@ class Looper:
     MAX_S = 60  # longest loop
     FADE_S = 0.01  # start/stop fades, so it doesn't click
     LATE_PRESS = 1 / 8  # a press up to an eighth of a bar after beat 1 still counts as on beat 1
-    AUTO_BARS = [0, 1, 2, 4]  # 0 = manual
-    REPEATS = [1, 2, 3, 4, 0]  # times an auto take plays back; 0 = until you stop it
+    AUTO_BARS = [1, 2, 4, 0]  # 0 = manual
 
     def __init__(self):
         self.history = np.zeros(int((self.MAX_S + 10) * SR), np.float32)  # the guitar, always, newest last
         self.latency = 0  # round trip in samples; set once the stream is open
         self.commands = collections.deque()  # from the key thread; run at the start of the next audio block
         self.level_db = 0.0
-        self.auto_bars = 2
-        self.repeats = 2
+        self.auto_bars = 1
         self.gen = 0  # bumped whenever the loop is thrown away, so a stale offer from maintain() is ignored
         self.offer = None  # (gen, kind, ...): an array maintain() made, for the callback to adopt
         self.clear()
 
     def clear(self):
         self.gen += 1
-        self.take = None  # an auto take on its way: (count-in start, loop start, loop end), music time
+        self.take = None  # an auto take on its way: (count-in start, take start, take end, "new"/"dub"), music time
         self.auto_take = False  # the loop being recorded is an auto take
-        self.end_at = None  # music time an auto take stops playing
         self.state = "empty"  # empty / recording / playing / overdub / stopped
         # The audio callback never allocates or copies whole loops (60 s of copying in a 0.7 ms block would
         # crackle): maintain(), on the main thread, does that and swaps the results in
@@ -1117,13 +1118,24 @@ class Looper:
         """Returns False to try again next block (waiting on maintain())."""
         s = self.state
         if cmd == "loop" and self.auto_bars and backing.active:
+            # pressed again during a count-in or a take: cancel it (a layer goes, the loop keeps playing)
+            if self.take and self.take[3] == "dub" or s == "overdub":
+                return self.cancel_layer()
             if self.take or s == "recording":
-                self.clear()  # pressed again during the count-in or the take: cancel
+                self.clear()
                 return True
             start = self.quantize_start(now, backing)
             bar = self.bar_grid(backing)[1]
             m0 = int(start + bar)
-            self.take = (start, m0, int(m0 + self.auto_bars * bar))
+            if s == "playing":  # layer on top: one pass of the loop, starting on a bar line of it
+                if self.spare is None or self.undo_layer is not None or self.layer is not None:
+                    return False  # a spare layer is a few ms away
+                self.layer, self.spare = self.spare, None
+                self.od_on, self.od_off = m0 + self.latency, m0 + self.length + self.latency
+                self.take = (int(m0 - bar), m0, m0 + self.length, "dub")
+                start = m0 - bar
+            else:
+                self.take = (start, m0, int(m0 + self.auto_bars * bar), "new")
             for beat in range(4):  # count-in clicks, on top of the drums
                 at = int(start + beat * bar / 4)
                 if at >= now:
@@ -1144,11 +1156,14 @@ class Looper:
                 self.state = "playing"
             elif s == "stopped":
                 self.m0, self.state = self.quantize_start(now, backing), "playing"
-                if self.auto_bars and self.repeats and backing.active:  # an auto take plays its repeats again
-                    self.end_at = self.m0 + self.repeats * self.length
         elif cmd == "stop":
-            if self.take:
+            if self.take and self.take[3] == "new":
                 self.take = None
+                return True
+            if self.take and not self.cancel_layer():  # a layer still counting in goes; the loop stops too
+                return False
+            if s == "stopped":
+                self.m0, self.state = self.quantize_start(now, backing), "playing"
                 return True
             if s == "recording":
                 self.m1 = self.quantize_end(now, backing)
@@ -1157,8 +1172,6 @@ class Looper:
                 if s == "overdub":
                     self.od_off = now + self.latency
                 self.state = "stopped"
-            elif s == "stopped":
-                return self.run("loop", now, backing)
         elif cmd == "undo":
             if self.undo_layer is not None:
                 return False
@@ -1174,6 +1187,17 @@ class Looper:
             self.clear()
         return True
 
+    def cancel_layer(self):
+        """Drop an auto layer that's counting in (nothing written yet) or recording. False = try again."""
+        if self.take:  # still counting in: the layer is all zeros, so it goes back as the spare
+            self.take, self.spare, self.layer, self.od_on, self.od_off = None, self.layer, None, None, None
+            return True
+        if self.undo_layer is not None:
+            return False
+        self.undo_layer, self.layer, self.od_on, self.od_off = self.layer, None, None, None
+        self.state = "playing"
+        return True
+
     def __call__(self, y, now, backing):
         """y: the guitar this block, shape (frames,). Returns what the loop plays this block."""
         frames, h = len(y), len(self.history)
@@ -1185,8 +1209,11 @@ class Looper:
             self.commands.popleft()
         self.adopt()
 
-        if self.take:
-            _, m0, m1 = self.take
+        if self.take and self.take[3] == "dub":
+            if now >= self.take[1]:
+                self.take, self.state = None, "overdub"  # writing already starts on time (od_on)
+        elif self.take:
+            _, m0, m1, _ = self.take
             if self.state in ("playing", "overdub") and now + frames >= m0 - self.FADE_S * SR:
                 self.state = "stopped"  # the old loop fades out just before the new take starts
             if now + frames >= m0:
@@ -1202,11 +1229,7 @@ class Looper:
             self.length = self.m1 - self.m0
             self.state = "stopped" if self.stop_after_record else "playing"
             self.stop_after_record = False
-            if self.auto_take and self.repeats:
-                self.end_at = self.m1 + self.repeats * self.length
             self.auto_take = False
-        if self.end_at is not None and now + frames >= self.end_at - self.FADE_S * SR and self.state == "playing":
-            self.state, self.end_at = "stopped", None
         if not self.length:
             return np.zeros(frames, np.float32)
         n, mix = self.length, self.mix
@@ -1224,6 +1247,8 @@ class Looper:
             if self.od_off is not None and now + frames >= self.od_off:
                 self.layers.append(self.layer)
                 self.layer, self.od_on, self.od_off = None, None, None
+                if self.state == "overdub":
+                    self.state = "playing"
 
         target = 1.0 if self.state in ("playing", "overdub") else 0.0
         step = frames / (self.FADE_S * SR) * (1 if target else -1)
@@ -1239,10 +1264,11 @@ class Looper:
     def describe(self):
         now = self.loop_now
         if self.take:
-            start, m0, _ = self.take
+            start, m0, _, kind = self.take
+            what = "LAYER " if kind == "dub" else ""
             if now < start:
-                return "◌ COUNT-IN next bar"
-            return f"◌ COUNT-IN {4 - int(4 * (now - start) / (m0 - start))}"
+                return f"◌ {what}COUNT-IN next bar"
+            return f"◌ {what}COUNT-IN {4 - int(4 * (now - start) / (m0 - start))}"
         if self.state == "empty":
             return ""
         if self.state == "recording":
@@ -1252,15 +1278,13 @@ class Looper:
             return f"● REC {secs:.1f}s" + (" (closing on the bar)" if self.m1 else "")
         n = self.length
         word = {"playing": "▶ LOOP", "overdub": "● DUB", "stopped": "■ LOOP"}[self.state]
-        if self.state == "playing" and self.end_at is not None:
-            return f"{word} {max(1, self.repeats - int(np.ceil((self.end_at - now) / n)) + 1)}/{self.repeats}"
         return f"{word} {n / SR:.1f}s +{len(self.layers) + (self.layer is not None)}"
 
     def mode(self):
         if not self.auto_bars:
             return "Looper: manual (space = record / play / overdub)"
-        return (f"Looper: auto, {self.auto_bars} bar{'s' if self.auto_bars > 1 else ''}, plays "
-                + (f"{self.repeats}x" if self.repeats else "until you stop it") + " (needs the drums on)")
+        return (f"Looper: auto, {self.auto_bars} bar{'s' if self.auto_bars > 1 else ''} "
+                "(space = count in + record; again = count in + layer on top; needs the drums on)")
 
 
 class Rig:
@@ -1475,14 +1499,13 @@ def menu(rig):
         "   ; / '  backing volume -/+ 3 dB",
         "   p      song backing: drums + bass + chords (Comfortably Numb outro solo, Bm 63 BPM) / off",
         section("LOOPER"),
-        "   space  AUTO (default, drums on): a bar of count-in clicks, records the next 2 bars, plays them",
-        "          back 2x, stops. Press again for the next take (even mid-loop); again during it = cancel",
-        "          MANUAL (or drums off): record -> play -> overdub -> play ... (first loop sets the length)",
+        "   space  (drums on) a bar of count-in clicks, then records 1 bar and loops it, forever",
+        "          space again: another count-in, then one pass recorded on top; the loop keeps going",
+        "          space during a count-in or a take cancels it. Drums off: record -> play -> overdub ...",
         "          A USB footswitch that types space or Enter works too",
-        "   v      loop mode: manual / auto 1 bar / auto 2 bars / auto 4 bars",
-        "   y      auto playbacks: 1 / 2 / 3 / 4 / until stopped",
+        "   v      loop length: 1 bar / 2 bars / 4 bars / manual",
         "   a      stop / play again from the top",
-        "   z      undo the last overdub (manual)",
+        "   z      undo the last layer",
         "   c      clear the loop",
         section("OTHER"),
         "   h      show this menu again",
@@ -1635,11 +1658,12 @@ def main():
     latency = "low"
     if driver == "Core Audio" and in_dev == out_dev:
         latency = 0.003  # Core Audio's "low" is ~20 ms; asking for 3 ms gets ~8 ms round trip on a Scarlett
-        if SR <= 96000:
-            # Not 0 (Core Audio's choice): with this latency it picks 18-sample blocks, 0.4 ms to run the whole
-            # chain in, and drops ~1.6 blocks a second (crackle that PortAudio never flags). 64 = 1.45 ms at 44.1k,
-            # about 2x the slowest callback. A fixed 128 is fine on a 192 kHz Scarlett but 15 ms at 44.1 kHz.
-            blocksize = 32 if SR <= 48000 else 128
+        # ~1.3 ms per block whatever the rate. The callback itself needs ~0.2 ms, but it shares Python's GIL with
+        # the main loop, and while the main thread holds it (or is descheduled holding it) the callback waits:
+        # measured on a 192 kHz Scarlett with a stand-in main loop, 128 samples (0.67 ms, 8.3 ms round trip)
+        # dropped ~1.4 blocks/s = crackle; 256 (10.3 ms) about 1 per 30 s. Core Audio's own choice (blocksize 0)
+        # was 18 samples at 44.1k: worse still.
+        blocksize = 64 if SR <= 48000 else 128 if SR <= 96000 else 256
     elif driver == "Core Audio":
         blocksize = 64  # split in/out devices (Spark GO): smaller buffers drop out, this is ~35 ms and stable
     stream = sd.Stream(samplerate=SR, blocksize=blocksize, device=(in_dev, out_dev), channels=(n_in, 2),
@@ -1772,12 +1796,9 @@ def main():
                     rig.looper.press("undo")
                 elif k == "c":
                     rig.looper.press("clear")
-                elif k in "vy":
+                elif k == "v":
                     lp = rig.looper
-                    if k == "v":
-                        lp.auto_bars = lp.AUTO_BARS[(lp.AUTO_BARS.index(lp.auto_bars) + 1) % len(lp.AUTO_BARS)]
-                    else:
-                        lp.repeats = lp.REPEATS[(lp.REPEATS.index(lp.repeats) + 1) % len(lp.REPEATS)]
+                    lp.auto_bars = lp.AUTO_BARS[(lp.AUTO_BARS.index(lp.auto_bars) + 1) % len(lp.AUTO_BARS)]
                     sys.stdout.write("\r\x1b[K")
                     print(lp.mode())
                     globals()["_announce_rows"] = 0
@@ -1808,7 +1829,12 @@ def main():
             width = shutil.get_terminal_size().columns - 1
             sys.stdout.write(status[:width + 1] + "\x1b[K")
             sys.stdout.flush()
-            time.sleep(0.05)
+            # 10 Hz, not 20: every wake-up competes with the audio callback for the GIL. Waiting on the keyboard
+            # instead of sleeping still handles a keypress the moment it lands (the looper times from it).
+            if sys.platform == "win32":
+                time.sleep(0.05)
+            else:
+                select.select([sys.stdin], [], [], 0.1)
 
 
 if __name__ == "__main__":

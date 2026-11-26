@@ -46,9 +46,9 @@ rig's window is focused.
 | `k` / `l` | 12-bar blues bass line on/off / bass key (E A G C D) |
 | `;` / `'` | backing volume |
 | `p` | song backing: drums + bass + chords (Comfortably Numb outro solo, Bm, 63 BPM) / off |
-| space | looper. **Auto** (default, drums on): a bar of count-in clicks, records the next 2 bars, plays them back 2×, stops; press again for the next take. **Manual** (or drums off): record → play → overdub → play … A USB footswitch that types space/Enter works |
-| `v` / `y` | loop mode (manual / auto 1, 2, 4 bars) / auto playbacks (1, 2, 3, 4, until stopped) |
-| `a` / `z` / `c` | looper: stop/play from the top / undo last overdub / clear |
+| space | looper (drums on): a bar of count-in clicks, then records 1 bar and loops it. Space again: another count-in, then one pass recorded on top while the loop keeps going. Space during a count-in/take cancels it. Drums off: record → play → overdub … A USB footswitch that types space/Enter works |
+| `v` | loop length: 1 / 2 / 4 bars / manual |
+| `a` / `z` / `c` | looper: stop/play from the top / undo last layer / clear |
 | `x` / `q` | restart / quit |
 
 ## Quick start (Mac)
